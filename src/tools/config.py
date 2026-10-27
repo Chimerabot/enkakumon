@@ -1,4 +1,4 @@
-#config.py — tunable values for enkakumon. No logic in this file.
+# config.py — tunable values for enkakumon. No logic in this file.
 
 # --- Sampling ---
 SAMPLE_HZ = 1

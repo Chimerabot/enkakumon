@@ -1,0 +1,13 @@
+# Build output
+/enkakumond
+/build/
+*.o
+*.d
+
+# Runtime state
+pet.state
+*.tmp
+
+# Python
+__pycache__/
+*.pyc

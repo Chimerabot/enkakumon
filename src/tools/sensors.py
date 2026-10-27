@@ -123,9 +123,12 @@ class Sensors:
     # ---------- per-device reads ----------
 
     def _voc_loop(self):
+        # The VOC index algorithm assumes exactly one sample per second.
+        next_t = time.monotonic()
         while True:
             self._voc = self._read_voc()
-            time.sleep(0.5)
+            next_t += 1.0
+            time.sleep(max(0, next_t - time.monotonic()))
     
     def _read_scd(self):
         if self.scd is None:
