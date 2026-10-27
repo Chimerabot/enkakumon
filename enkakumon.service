@@ -1,0 +1,27 @@
+# enkakumon.service — supervises enkakumond.
+#
+# Install: sudo cp enkakumon.service /etc/systemd/system/ &&
+#          sudo systemctl daemon-reload && sudo systemctl enable --now enkakumon
+#
+# Acceptance tests: systemctl stop enkakumon exits 0 (journalctl shows
+# "stopping"); killing the daemon with SIGKILL makes systemd restart it.
+# Exit 1 (config error) is not restarted: fix the config first.
+
+[Unit]
+Description=enkakumon sensor daemon
+After=sound.target
+
+[Service]
+Type=simple
+User=enkakumon
+SupplementaryGroups=i2c audio
+WorkingDirectory=/home/enkakumon/enkakumon
+ExecStart=/home/enkakumon/enkakumon/enkakumond /home/enkakumon/enkakumon/enkakumon.conf
+Restart=on-failure
+RestartSec=2
+RestartPreventExitStatus=1
+KillSignal=SIGTERM
+TimeoutStopSec=5
+
+[Install]
+WantedBy=multi-user.target
