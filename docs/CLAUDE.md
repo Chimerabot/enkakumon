@@ -1,14 +1,14 @@
 # enkakumon: team rules
 
 ## Commands
-- Build: ‘make‘ Cross/deploy: ‘make deploy PI=pi@<host>‘
+- Build: ‘make‘ Update (on the Pi): ‘git pull && make‘
 - Tests: ‘make test‘ Sanitizers: ‘make asan‘ Valgrind: ‘make memcheck‘
 - Soak sanity: ‘make soakcheck‘ (1-hour miniature of the 48h run)
 - A change is DONE only when build, test, and asan pass. Show output.
 ## Hard constraints
 - The PRODUCT makes no network calls except serving its own LAN
 interface. No LLM APIs, no cloud inference, no pretrained models.
-The intelligence in analysis/ is ours. This is a graded boundary.
+It does not require live connection to outside resources.
 - Every daemon must be supervisable: clean exit codes, no orphaned
 fds across restart, heartbeat within 60s of start.
 - Every allocation checked; every syscall’s error path handled and
@@ -17,6 +17,8 @@ logged. The 48-hour soak is the test suite of last resort.
 ## Ownership
 - TBD
 ## Style
+- The machine is a Raspberry Pi Zero 2 W with very limited processing
+power: keep code appropriately lightweight.
 - Systems core: C17, -Wall -Wextra -Werror, no VLAs.
 goto-cleanup for multi-resource functions.
 - Python permitted only under tools/ and ui/. No graded mechanism
