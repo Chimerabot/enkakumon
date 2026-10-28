@@ -29,3 +29,9 @@ may live there.
 - Hardware bugs: paste real evidence (dmesg, timing capture,
 /proc/interrupts). No fixes proposed from a verbal description.
 - Commit only from a green state; message format "M<n>: <what>".
+## Commit log
+- 619329c M1: sensor daemon core (Step 1) — enkakumond: four I2C
+sensors + mic on a 1 s timerfd loop, JSON over a Unix socket,
+per-sensor retry. make test / asan / memcheck green.
+- 8f59ae1 M1: systemd unit for enkakumond — Restart=on-failure,
+except exit 1 (config error).
