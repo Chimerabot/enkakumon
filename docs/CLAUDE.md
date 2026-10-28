@@ -35,3 +35,8 @@ sensors + mic on a 1 s timerfd loop, JSON over a Unix socket,
 per-sensor retry. make test / asan / memcheck green.
 - 8f59ae1 M1: systemd unit for enkakumond — Restart=on-failure,
 except exit 1 (config error).
+- 6e17788 M2: UI config reader and touch calibration keys.
+- decc1d1 M2: display module — off-screen rendering (no flicker),
+right-aligned graph with gaps and warn line, debounced touch.
+- a73bb83 M2: UI main loop — socket client, 600-sample history,
+tap cycling, "daemon offline" with 2 s reconnect.
