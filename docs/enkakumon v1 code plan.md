@@ -13,15 +13,15 @@ src/       C17 daemon: sensors, mic, IPC, config      (systems core)
 src/analysis/  C health system                         (graded mechanism)
 src/vendor/    Sensirion gas index algorithm (BSD-3; gas-index-algorithm @ 2ef9f13)
 src/ui/        Python: display, touch, screens        (no graded logic)
-src/tools/     Python: bring-up and calibration scripts
-test/      C unit tests run by make test / asan / memcheck; hwtest.py
+src/tools/     Python: bring-up and calibration scripts; test/hwtest.py
+test/      C unit tests run by make test / asan / memcheck
 ```
 
 **Environment:**
 
 - Raspberry Pi OS Lite 64-bit, headless. Reach it with `ssh enkakumon@enkakumon.local` on the same network. I2C, SPI and audio overlays enabled. Already set up.
 - Add: `sudo apt install build-essential libasound2-dev valgrind socat git`.
-- Python venv at `~/enkakumon-env` with `adafruit-blinka`, `numpy`, `sounddevice`, `adafruit-circuitpython-scd4x`, `-sgp40`, `-apds9960`, `-lsm6ds`, `-tsc2007`, `-rgb-display`, plus system Pillow. The UI needs only blinka, `-tsc2007`, `-rgb-display` and Pillow. The sensor libraries are used only by `src/tools/sensors.py` and `test/hwtest.py`.
+- Python venv at `~/enkakumon-env` with `adafruit-blinka`, `numpy`, `sounddevice`, `adafruit-circuitpython-scd4x`, `-sgp40`, `-apds9960`, `-lsm6ds`, `-tsc2007`, `-rgb-display`, plus system Pillow. The UI needs only blinka, `-tsc2007`, `-rgb-display` and Pillow. The sensor libraries are used only by `src/tools/sensors.py` and `src/tools/test/hwtest.py`.
 - Repo: a clone of the GitHub repo at `~/enkakumon/`. Code may be written elsewhere, but it is built, run and validated only on the Pi: `git pull && make`. Run the daemon with `./enkakumond [conf]` and the UI with `python src/ui/main.py` from the activated venv.
 
 **Rules:**
@@ -44,7 +44,7 @@ Use the datasheet and the matching Adafruit Python driver as references for each
 | SCD40 (CO₂, temp, RH) | I2C 0x62 | `adafruit_scd4x.SCD4X` | Start periodic 0x21B1; data-ready 0xE4B8 (ready if low 11 bits ≠ 0); read 0xEC05 → CO₂ ppm, T = −45 + 175·raw/65535, RH = 100·raw/65535. New data every 5 s. Stop 0x3F86 (wait 500 ms) on exit. Apply `TEMP_OFFSET_C` |
 | SGP40 (VOC index) | I2C 0x59 | `adafruit_sgp40.SGP40` | Measure raw 0x260F + RH ticks (RH·65535/100) + T ticks ((T+45)·65535/175), wait 30 ms, read word. Feed raw to the vendored `GasIndexAlgorithm_process` **every 1 s exactly**. Index 0–500, \~100 = normal |
 | APDS9960 (light, proximity) | I2C 0x39 | `adafruit_apds9960.apds9960.APDS9960` | ENABLE 0x80 = PON\|AEN\|PEN; proximity PDATA 0x9C (0–255); clear channel CDATA 0x94–0x95 |
-| LSM6DSOX (motion) | I2C 0x6A | `adafruit_lsm6ds.lsm6dsox.LSM6DSOX` | WHO_AM_I 0x0F = 0x6C; CTRL1_XL 0x10 (≥ 26 Hz, ±2 g); accel at 0x28 (6 bytes, 0.061 mg/LSB). Pedometer through embedded functions; mirror the driver's `pedometer_enable` / `pedometer_steps` |
+| LSM6DSOX (motion) | I2C 0x6A | `adafruit_lsm6ds.lsm6dsox.LSM6DSOX` | WHO_AM_I 0x0F = 0x6C; CTRL1_XL 0x10 (≥ 26 Hz, ±2 g); accel at 0x28 (6 bytes, 0.061 mg/LSB). Pedometer is in the embedded-functions bank: FUNC_CFG_ACCESS 0x01 = 0x80 selects it, 0x00 returns. In that bank, PEDO_EN is EMB_FUNC_EN_A 0x04 bit 3, PEDO_RST_STEP is EMB_FUNC_SRC 0x64 bit 7, and STEP_COUNTER is 0x62/0x63 (unsigned 16-bit). Do not copy the Adafruit driver's `pedometer_*`: it uses LSM6DS33 registers. |
 | TSC2007 (touch) | I2C 0x48 | `adafruit_tsc2007.TSC2007` (UI, Python) | `touched`, `touch` → raw x/y/pressure; map to pixels with min/max in config |
 | ILI9341 display, 240×320 | SPI CE0, D/C = GPIO 25, RST = GPIO 24 | `adafruit_rgb_display.ili9341.ILI9341` (UI, Python) | Draw with Pillow, push with `disp.image(img)`; baudrate 24 MHz; full redraw \~0.2 s |
 | SPH0645 mic | I2S, ALSA card name contains `googlevoicehat` | libasound | Open `plughw:<card>`, 48 kHz, mono, S32_LE. dB SPL ≈ 20·log10(RMS / 2³¹) + `DB_OFFSET` (default 120); subtract mean first |
@@ -73,11 +73,11 @@ All I2C devices share `/dev/i2c-1` (raw `ioctl(I2C_RDWR)` in C; `board.I2C()` in
 | `co2` | ppm | SCD40 (last value; refresh when ready) |
 | `temp_c` | °C | SCD40 minus offset |
 | `rh` | % | SCD40 |
-| `voc` | index 0–500 | SGP40, compensated with temp/RH |
+| `voc` | index 1–500 | SGP40, compensated with temp/RH; `null` for the first 45 s |
 | `light` | raw clear count | APDS9960 |
 | `proximity` | 0–255 | APDS9960 |
 | `motion` | m/s² | LSM6DSOX: \|acceleration\| minus 9.81, absolute |
-| `steps` | count | LSM6DSOX pedometer |
+| `steps` | count | LSM6DSOX pedometer; restarts at 0 when the daemon or sensor re-inits, and wraps at 65535 |
 | `db` | dB SPL | Mic: 1 s average from the capture thread; `null` if no samples arrived in the last 2 s |
 
 - `enkakumond --print` also writes one line of all values to stdout every second.

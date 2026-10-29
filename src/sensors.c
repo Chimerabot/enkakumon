@@ -33,14 +33,20 @@
 #define APDS_ENABLE_PON_AEN_PEN 0x07
 
 /* LSM6DSOX registers */
+#define LSM_FUNC_CFG_ACCESS 0x01  /* bank select; present in every bank */
+#define LSM_BANK_EMB 0x80         /* embedded-functions bank */
 #define LSM_WHO_AM_I 0x0F
 #define LSM_WHO_AM_I_VALUE 0x6C
 #define LSM_CTRL1_XL 0x10
 #define LSM_CTRL3_C 0x12
-#define LSM_CTRL10_C 0x19
 #define LSM_OUTX_L_A 0x28
-#define LSM_STEP_COUNTER 0x4B
-#define LSM_TAP_CFG 0x58
+
+/* LSM6DSOX embedded-functions bank (DS12814 section 10) */
+#define LSM_EMB_FUNC_EN_A 0x04
+#define LSM_PEDO_EN 0x08
+#define LSM_STEP_COUNTER_L 0x62
+#define LSM_EMB_FUNC_SRC 0x64
+#define LSM_PEDO_RST_STEP 0x80
 
 enum { SCD_IDLE, SCD_STOPPING, SCD_RUNNING };
 
@@ -309,7 +315,8 @@ static void sgp40_cycle(struct sensors *s, struct readings *r, time_t now)
 
     int32_t index;
     GasIndexAlgorithm_process(&s->gas, (int32_t)raw, &index);
-    r->voc = index;
+    /* The algorithm outputs 0 during its 45 s start-up blackout, then 1-500. */
+    r->voc = index > 0 ? index : NAN;
 }
 
 /* ---------- APDS9960 ---------- */
@@ -351,10 +358,18 @@ static void apds_cycle(struct sensors *s, struct readings *r, time_t now)
 
 /* ---------- LSM6DSOX ---------- */
 
+static int lsm_bank(int fd, uint8_t bank)
+{
+    return reg_write(fd, LSM6DSOX_ADDR, LSM_FUNC_CFG_ACCESS, bank);
+}
+
 static int lsm_init(struct sensors *s)
 {
     uint8_t v;
 
+    /* A failed read may have left the embedded bank selected. */
+    if (lsm_bank(s->fd, 0x00) != 0)
+        return -1;
     if (reg_read(s->fd, LSM6DSOX_ADDR, LSM_WHO_AM_I, &v, 1) != 0)
         return -1;
     if (v != LSM_WHO_AM_I_VALUE) {
@@ -377,10 +392,13 @@ static int lsm_init(struct sensors *s)
     if (reg_set_bits(s->fd, LSM6DSOX_ADDR, LSM_CTRL3_C, 0x40) != 0 ||   /* BDU */
         reg_write(s->fd, LSM6DSOX_ADDR, LSM_CTRL1_XL, 0x40) != 0)       /* 104 Hz, +-2 g */
         return -1;
-    /* Pedometer: mirrors adafruit_lsm6ds pedometer_enable exactly, as the code
-     * plan specifies (TAP_CFG bit 6; CTRL10_C FUNC_EN bit 2 and reset bit 1). */
-    if (reg_set_bits(s->fd, LSM6DSOX_ADDR, LSM_TAP_CFG, 0x40) != 0 ||
-        reg_set_bits(s->fd, LSM6DSOX_ADDR, LSM_CTRL10_C, 0x06) != 0)
+    /* Pedometer lives in the embedded-functions bank. Enable it and zero the
+     * count, so the count restarts from 0 on every (re)init. */
+    if (lsm_bank(s->fd, LSM_BANK_EMB) != 0)
+        return -1;
+    bool err = reg_set_bits(s->fd, LSM6DSOX_ADDR, LSM_EMB_FUNC_EN_A, LSM_PEDO_EN) != 0 ||
+               reg_set_bits(s->fd, LSM6DSOX_ADDR, LSM_EMB_FUNC_SRC, LSM_PEDO_RST_STEP) != 0;
+    if (lsm_bank(s->fd, 0x00) != 0 || err)
         return -1;
     return 0;
 }
@@ -392,7 +410,12 @@ static void lsm_cycle(struct sensors *s, struct readings *r, time_t now)
     if (!dev_ready(s, DEV_LSM6DSOX, now, lsm_init, "init"))
         return;
     if (reg_read(s->fd, LSM6DSOX_ADDR, LSM_OUTX_L_A, a, sizeof(a)) != 0 ||
-        reg_read(s->fd, LSM6DSOX_ADDR, LSM_STEP_COUNTER, st, sizeof(st)) != 0) {
+        lsm_bank(s->fd, LSM_BANK_EMB) != 0) {
+        dev_fail(s, DEV_LSM6DSOX, "read", now);
+        return;
+    }
+    bool err = reg_read(s->fd, LSM6DSOX_ADDR, LSM_STEP_COUNTER_L, st, sizeof(st)) != 0;
+    if (lsm_bank(s->fd, 0x00) != 0 || err) {
         dev_fail(s, DEV_LSM6DSOX, "read", now);
         return;
     }
@@ -400,7 +423,7 @@ static void lsm_cycle(struct sensors *s, struct readings *r, time_t now)
     int16_t y = (int16_t)(a[2] | (a[3] << 8));
     int16_t z = (int16_t)(a[4] | (a[5] << 8));
     r->motion = lsm6dsox_motion(x, y, z);
-    r->steps = (int16_t)(st[0] | (st[1] << 8)); /* "<h" like pedometer_steps */
+    r->steps = (uint16_t)(st[0] | (st[1] << 8)); /* unsigned; wraps at 65535 */
 }
 
 /* ---------- public ---------- */
