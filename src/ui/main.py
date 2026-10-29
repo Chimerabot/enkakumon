@@ -12,8 +12,12 @@ Acceptance tests (on the Pi):
   with the daemon running, the CO2 graph fills over time; taps cycle
   CO2 -> Air quality -> Noise -> CO2 and respond in under 1 s; the screen
   updates every second without flicker; restarting the daemon shows
-  "daemon offline" and then recovers. Ctrl-C or SIGTERM blanks the screen
-  and exits 0.
+  "daemon offline" and then recovers, with the outage drawn as a gap. For
+  the first minute after (re)connecting, missing Air quality reads "warming
+  up" (the SGP40 index is null for 45 s after the daemon starts). With
+  MAX_CLIENTS other clients connected, the UI stays on "daemon offline",
+  logs the refusal once, and does not flicker. Ctrl-C or SIGTERM blanks the
+  screen and exits 0.
 """
 import collections
 import json
@@ -35,6 +39,10 @@ SCREENS = (
 RETRY_S = 2.0      # reconnect interval while the daemon is unreachable
 POLL_S = 0.05      # select timeout = touch polling interval
 MAX_LINE = 4096    # longer "lines" are garbage; drop them
+GAP_S = 2.5        # a longer silence is recorded as missing samples
+# Keys that are null while the daemon warms up, and for how long (s) after
+# connecting a missing value means "warming up" rather than "sensor offline".
+WARMUP_S = {"voc": 60}
 
 
 def log(msg):
@@ -136,15 +144,17 @@ def main(argv):
     next_connect = 0.0
     offline_shown = False
     bad_lines = 0
-    redraw = True
+    redraw = False
+    got_line = False      # a reading has arrived on this connection
+    connected_at = 0.0    # when this connection's first reading arrived
+    last_line_at = None   # when the latest reading arrived; kept across reconnects
+    refused_logged = False
 
     while not stop:
         now = time.monotonic()
         if client.sock is None and now >= next_connect:
             if client.connect():
-                log(f"connected to {client.path}")
-                offline_shown = False
-                redraw = True
+                got_line = False  # the screen changes only once data arrives
             else:
                 next_connect = now + RETRY_S
 
@@ -161,8 +171,15 @@ def main(argv):
         if readable:
             lines = client.read_lines()
             if lines is None:
-                log("daemon disconnected")
+                if got_line:
+                    log("daemon disconnected")
+                elif not refused_logged:
+                    # The daemon closes clients beyond MAX_CLIENTS straight away.
+                    log(f"daemon closed the connection before sending data "
+                        f"(MAX_CLIENTS reached?); retrying every {RETRY_S:.0f} s")
+                    refused_logged = True
                 client.close()
+                got_line = False
                 next_connect = time.monotonic() + RETRY_S
                 continue
             for line in lines:
@@ -172,6 +189,20 @@ def main(argv):
                     if bad_lines == 1 or bad_lines % 100 == 0:
                         log(f"ignored {bad_lines} malformed line(s)")
                     continue
+                now = time.monotonic()
+                if not got_line:
+                    log(f"connected to {client.path}")
+                    got_line = True
+                    connected_at = now
+                    offline_shown = False
+                    refused_logged = False
+                # Record an outage as missing samples, so the graph shows a gap
+                # instead of joining across it.
+                if last_line_at is not None and now - last_line_at > GAP_S:
+                    for _ in range(min(HISTORY, round(now - last_line_at) - 1)):
+                        for h in history.values():
+                            h.append(None)
+                last_line_at = now
                 for key, value in reading.items():
                     history[key].append(value)
                 redraw = True
@@ -181,9 +212,11 @@ def main(argv):
             client.send_tap()
             redraw = True
 
-        if redraw:
+        if redraw and got_line:
             title, key, unit, warn = SCREENS[screen]
-            disp.draw_graph(title, unit, history[key], warn)
+            warming = time.monotonic() - connected_at < WARMUP_S.get(key, 0)
+            disp.draw_graph(title, unit, history[key], warn,
+                            "warming up" if warming else "sensor offline")
             redraw = False
 
     client.close()

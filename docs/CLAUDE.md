@@ -5,6 +5,8 @@
 - Tests: ‘make test‘ Sanitizers: ‘make asan‘ Valgrind: ‘make memcheck‘
 - Soak sanity: ‘make soakcheck‘ (1-hour miniature of the 48h run)
 - A change is DONE only when build, test, and asan pass. Show output.
+On the Pi, ASan fails at startup (incompatible with its kernel), so
+memcheck stands in for asan there.
 ## Hard constraints
 - The PRODUCT makes no network calls except serving its own LAN
 interface. No LLM APIs, no cloud inference, no pretrained models.

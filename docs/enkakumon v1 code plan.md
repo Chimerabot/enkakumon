@@ -33,7 +33,7 @@ test/      C unit tests run by make test / asan / memcheck
 5. Acceptance tests should be noted in comments at the top of relevant files.
 6. C follows `docs/CLAUDE.md`: C17, `-Wall -Wextra -Werror`, no VLAs, goto-cleanup, every allocation and syscall checked and logged, `O_CLOEXEC` on every fd.
 7. No network use beyond the local Unix socket. Vendored code is fetched at development time only.
-8. Finish one step, adversarially review the code for soundness, run `make && make test && make asan` on the Pi and show the output, then stop and ask the user for permission to continue.
+8. Finish one step, adversarially review the code for soundness, run `make && make test && make memcheck` on the Pi and show the output (memcheck replaces asan there, since ASan fails at startup on the Pi's kernel), then stop and ask the user for permission to continue.
 
 ## Hardware reference
 
@@ -83,7 +83,7 @@ All I2C devices share `/dev/i2c-1` (raw `ioctl(I2C_RDWR)` in C; `board.I2C()` in
 - `enkakumond --print` also writes one line of all values to stdout every second.
 - Tests cover CRC-8 vectors, the SCD40 and SGP40 conversions, the dB formula (including RMS = 0), config parsing (including bad lines), and the JSON line format with nulls.
 
-**Acceptance:** `make && make test && make asan` pass. `./enkakumond --print` prints values every second for 2 minutes without crashing. Breathing on the board raises `co2`; covering the APDS9960 raises `proximity`; shaking raises `motion`; clapping raises `db`. With I2C disconnected, it prints `--` and keeps running. `socat - UNIX-CONNECT:<SOCKET_PATH>` shows one JSON line per second. `systemctl stop` exits 0. `make soakcheck` passes.
+**Acceptance:** `make && make test && make memcheck` pass. `./enkakumond --print` prints values every second for 2 minutes without crashing. Breathing on the board raises `co2`; covering the APDS9960 raises `proximity`; shaking raises `motion`; clapping raises `db`. With I2C disconnected, it prints `--` and keeps running. `socat - UNIX-CONNECT:<SOCKET_PATH>` shows one JSON line per second. `systemctl stop` exits 0. `make soakcheck` passes.
 
 ## Step 2: Graphs on the touchscreen (Python UI)
 
@@ -128,4 +128,4 @@ All I2C devices share `/dev/i2c-1` (raw `ioctl(I2C_RDWR)` in C; `board.I2C()` in
 - Display: add a **Pet** screen first in the tap cycle. It shows a simple face (circle, eyes and mouth drawn with Pillow) colored by mood, a health bar, and `worst` as one line of text.
 - Tests cover each rule and their sum, clamping, skipping nulls, sleep entry and wake, mood boundaries, and save/load round-trip including a corrupt file.
 
-**Acceptance:** `make test asan memcheck` pass. The Pet screen shows on start. Breathing on the SCD40 for 2 minutes lowers health; walking around raises it; covering the proximity sensor shows `sleeping`. Health survives a daemon restart and a `kill -9`, losing at most 60 s of changes.
+**Acceptance:** `make test memcheck` pass. The Pet screen shows on start. Breathing on the SCD40 for 2 minutes lowers health; walking around raises it; covering the proximity sensor shows `sleeping`. Health survives a daemon restart and a `kill -9`, losing at most 60 s of changes.

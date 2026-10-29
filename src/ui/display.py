@@ -12,7 +12,8 @@ Acceptance tests (on the Pi):
   draw_graph shows the title, the current value in large text (white, orange
   above warn, red above 1.5x warn), up to 600 samples as a line graph with
   min/max labels and a dashed warn line; None values leave gaps, and a None
-  latest value shows "sensor offline".
+  latest value shows missing_text ("sensor offline" unless the caller says
+  otherwise, e.g. "warming up").
   get_tap returns one (x, y) in screen pixels per press, however long the
   press; touching the top-left corner gives roughly (0, 0).
   An unplugged touch controller is logged once and retried every RETRY_S.
@@ -83,7 +84,7 @@ def format_value(value):
     return f"{value:.1f}"
 
 
-def render_graph(title, unit, values, warn_level):
+def render_graph(title, unit, values, warn_level, missing_text="sensor offline"):
     """Return a WIDTH x HEIGHT image of one metric's graph."""
     img = Image.new("RGB", (WIDTH, HEIGHT), BLACK)
     d = ImageDraw.Draw(img)
@@ -97,7 +98,7 @@ def render_graph(title, unit, values, warn_level):
         d.text((8, 32), text, font=big, fill=value_color(latest, warn_level))
         d.text((12 + d.textlength(text, font=big), 58), unit, font=_font(16), fill=GREY)
     else:
-        d.text((8, 46), "no data yet" if not values else "sensor offline",
+        d.text((8, 46), "no data yet" if not values else missing_text,
                font=_font(22), fill=GREY)
 
     # Y range covers the data and the warn level, so the warn line is always shown.
@@ -193,8 +194,8 @@ class Display:
     def show(self, img):
         self._disp.image(img)
 
-    def draw_graph(self, title, unit, values, warn_level):
-        self.show(render_graph(title, unit, values, warn_level))
+    def draw_graph(self, title, unit, values, warn_level, missing_text="sensor offline"):
+        self.show(render_graph(title, unit, values, warn_level, missing_text))
 
     def show_message(self, text):
         self.show(render_message(text))
