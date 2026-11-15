@@ -11,3 +11,7 @@ pet.state
 # Python
 __pycache__/
 *.pyc
+
+# Submission files
+/transcripts
+*.MOV
