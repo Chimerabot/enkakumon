@@ -32,6 +32,27 @@ static const struct key keys[] = {
     { "SOCKET_PATH", K_STR, offsetof(struct conf, socket_path) },
     { "MAX_CLIENTS", K_INT, offsetof(struct conf, max_clients) },
     { "HEARTBEAT_PATH", K_STR, offsetof(struct conf, heartbeat_path) },
+    { "PET_PATH", K_STR, offsetof(struct conf, pet_path) },
+    { "PET_SAVE_S", K_INT, offsetof(struct conf, pet_save_s) },
+    { "PET_HEALTH_START", K_INT, offsetof(struct conf, pet_health_start) },
+    { "PET_CO2_WARN", K_DBL, offsetof(struct conf, pet_co2_warn) },
+    { "PET_CO2_BAD", K_DBL, offsetof(struct conf, pet_co2_bad) },
+    { "PET_VOC_WARN", K_DBL, offsetof(struct conf, pet_voc_warn) },
+    { "PET_VOC_BAD", K_DBL, offsetof(struct conf, pet_voc_bad) },
+    { "PET_DB_WARN", K_DBL, offsetof(struct conf, pet_db_warn) },
+    { "PET_DB_BAD", K_DBL, offsetof(struct conf, pet_db_bad) },
+    { "PET_TEMP_MIN", K_DBL, offsetof(struct conf, pet_temp_min) },
+    { "PET_TEMP_MAX", K_DBL, offsetof(struct conf, pet_temp_max) },
+    { "PET_RH_MIN", K_DBL, offsetof(struct conf, pet_rh_min) },
+    { "PET_RH_MAX", K_DBL, offsetof(struct conf, pet_rh_max) },
+    { "PET_ACTIVE_STEPS", K_INT, offsetof(struct conf, pet_active_steps) },
+    { "PET_ACTIVE_MOTION", K_DBL, offsetof(struct conf, pet_active_motion) },
+    { "PET_SLEEP_PROXIMITY", K_DBL, offsetof(struct conf, pet_sleep_proximity) },
+    { "PET_SLEEP_LIGHT", K_DBL, offsetof(struct conf, pet_sleep_light) },
+    { "PET_SLEEP_S", K_INT, offsetof(struct conf, pet_sleep_s) },
+    { "PET_WAKE_MOTION", K_DBL, offsetof(struct conf, pet_wake_motion) },
+    { "PET_HAPPY_MIN", K_INT, offsetof(struct conf, pet_happy_min) },
+    { "PET_OK_MIN", K_INT, offsetof(struct conf, pet_ok_min) },
 };
 
 void conf_defaults(struct conf *c)
@@ -50,6 +71,28 @@ void conf_defaults(struct conf *c)
     strcpy(c->socket_path, "/tmp/enkakumon.sock");
     c->max_clients = 4;
     strcpy(c->heartbeat_path, "/dev/shm/enkakumon.heartbeat");
+
+    strcpy(c->pet_path, "~/enkakumon/pet.state");
+    c->pet_save_s = 60;
+    c->pet_health_start = 80;
+    c->pet_co2_warn = 1000;
+    c->pet_co2_bad = 1500;
+    c->pet_voc_warn = 150;
+    c->pet_voc_bad = 250;
+    c->pet_db_warn = 70;
+    c->pet_db_bad = 85;
+    c->pet_temp_min = 18;
+    c->pet_temp_max = 26;
+    c->pet_rh_min = 30;
+    c->pet_rh_max = 60;
+    c->pet_active_steps = 20;
+    c->pet_active_motion = 0.5;
+    c->pet_sleep_proximity = 200;
+    c->pet_sleep_light = 10;
+    c->pet_sleep_s = 30;
+    c->pet_wake_motion = 1.0;
+    c->pet_happy_min = 70;
+    c->pet_ok_min = 40;
 }
 
 static char *trim(char *s)
@@ -109,8 +152,20 @@ static int validate(const struct conf *c, const char *path)
         bad = "MIC_PERIOD_FRAMES must be 1..MIC_RATE";
     else if (c->default_rh < 0.0 || c->default_rh > 100.0)
         bad = "DEFAULT_RH must be 0..100";
-    else if (c->i2c_dev[0] == '\0' || c->socket_path[0] == '\0' || c->heartbeat_path[0] == '\0')
-        bad = "I2C_DEV, SOCKET_PATH and HEARTBEAT_PATH must not be empty";
+    else if (c->i2c_dev[0] == '\0' || c->socket_path[0] == '\0' || c->heartbeat_path[0] == '\0' ||
+             c->pet_path[0] == '\0')
+        bad = "I2C_DEV, SOCKET_PATH, HEARTBEAT_PATH and PET_PATH must not be empty";
+    else if (c->pet_save_s < 1 || c->pet_sleep_s < 1 || c->pet_active_steps < 1)
+        bad = "PET_SAVE_S, PET_SLEEP_S and PET_ACTIVE_STEPS must be >= 1";
+    else if (c->pet_health_start < 0 || c->pet_health_start > 100)
+        bad = "PET_HEALTH_START must be 0..100";
+    else if (!(c->pet_co2_warn < c->pet_co2_bad && c->pet_voc_warn < c->pet_voc_bad &&
+               c->pet_db_warn < c->pet_db_bad))
+        bad = "each PET_*_WARN must be below its PET_*_BAD";
+    else if (!(c->pet_temp_min < c->pet_temp_max && c->pet_rh_min < c->pet_rh_max))
+        bad = "PET_TEMP_MIN/PET_RH_MIN must be below their _MAX";
+    else if (!(0 <= c->pet_ok_min && c->pet_ok_min < c->pet_happy_min && c->pet_happy_min <= 100))
+        bad = "need 0 <= PET_OK_MIN < PET_HAPPY_MIN <= 100";
 
     if (bad != NULL) {
         fprintf(stderr, "enkakumond: conf: %s: %s\n", path, bad);

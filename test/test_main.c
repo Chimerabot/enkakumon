@@ -185,6 +185,8 @@ static void test_conf(void)
     CHECK(load_text("SAMPLE_HZ = 2\n", &c) != 0);
     CHECK(load_text("MAX_CLIENTS = 0\n", &c) != 0);
     CHECK(load_text("MIC_PERIOD_FRAMES = 0\n", &c) != 0);
+    CHECK(load_text("PET_CO2_WARN = 1500\nPET_CO2_BAD = 1000\n", &c) != 0);
+    CHECK(load_text("PET_OK_MIN = 80\n", &c) != 0); /* above PET_HAPPY_MIN */
 
     char longline[700];
     memset(longline, 'A', sizeof(longline) - 2);

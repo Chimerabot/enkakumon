@@ -16,19 +16,20 @@ CPPFLAGS = -D_GNU_SOURCE -Isrc -MMD -MP
 LDLIBS   = -lasound -lpthread -lm
 ASAN     = -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize-recover=all
 
-LIB_SRC  = src/conf.c src/i2c.c src/sensors.c src/mic.c src/ipc.c \
+LIB_SRC  = src/conf.c src/i2c.c src/sensors.c src/mic.c src/ipc.c src/analysis/pet.c \
            src/vendor/sensirion_gas_index_algorithm.c
 LIB_OBJ  = $(LIB_SRC:%.c=build/%.o)
 MAIN_OBJ = build/src/main.o
-TEST_OBJ = build/test/test_main.o
+TESTS    = test_main test_pet
 
-ASAN_OBJ = $(LIB_SRC:%.c=build/asan/%.o) build/asan/test/test_main.o
+ASAN_LIB_OBJ = $(LIB_SRC:%.c=build/asan/%.o)
 
 SOAK_S        ?= 3600
 SOAK_WARMUP_S ?= 60
 SOAK_CONF     ?= enkakumon.conf
 
 .PHONY: all test asan memcheck soakcheck clean
+.SECONDARY:
 
 all: enkakumond
 
@@ -43,22 +44,23 @@ build/asan/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(WARN) $(ASAN) $(CPPFLAGS) -c -o $@ $<
 
-build/test_main: $(TEST_OBJ) $(LIB_OBJ)
+build/test_%: build/test/test_%.o $(LIB_OBJ)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
-build/asan/test_main: $(ASAN_OBJ)
+build/asan/test_%: build/asan/test/test_%.o $(ASAN_LIB_OBJ)
 	$(CC) $(ASAN) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
-test: build/test_main
-	./build/test_main
+test: $(TESTS:%=build/%)
+	@for t in $^; do echo "== $$t"; ./$$t || exit 1; done
 
-asan: build/asan/test_main
-	ASAN_OPTIONS=detect_leaks=1 ./build/asan/test_main
+asan: $(TESTS:%=build/asan/%)
+	@for t in $^; do echo "== $$t"; ASAN_OPTIONS=detect_leaks=1 ./$$t || exit 1; done
 
-memcheck: build/test_main
-	valgrind --leak-check=full --show-leak-kinds=definite,indirect,possible \
+memcheck: $(TESTS:%=build/%)
+	@for t in $^; do echo "== $$t"; \
+		valgrind -q --leak-check=full --show-leak-kinds=definite,indirect,possible \
 		--errors-for-leak-kinds=definite,indirect,possible --error-exitcode=1 \
-		./build/test_main
+		./$$t || exit 1; done
 
 soakcheck: enkakumond
 	@set -u; \
