@@ -50,7 +50,15 @@ void ipc_drop(struct ipc *p, int slot);
 void ipc_publish(struct ipc *p, const char *line, size_t len);
 void ipc_close(struct ipc *p);
 
+/* The pet's part of the JSON line. worst may be NULL (published as null). */
+struct pet_status {
+    int health;
+    const char *mood;
+    const char *worst;
+};
+
 /* Formats the contract line, newline included. Returns its length, or -1. */
-int ipc_format_json(char *buf, size_t size, time_t t, const struct readings *r);
+int ipc_format_json(char *buf, size_t size, time_t t, const struct readings *r,
+                    const struct pet_status *pet);
 
 #endif

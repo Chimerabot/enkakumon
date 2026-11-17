@@ -29,6 +29,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "analysis/pet.h"
 #include "conf.h"
 #include "ipc.h"
 #include "mic.h"
@@ -43,9 +44,12 @@ struct daemon {
     struct sensors sensors;
     struct mic mic;
     struct ipc ipc;
+    struct pet pet;
     bool print;
     int sig_fd, timer_fd, hb_fd;
     bool hb_logged, json_logged, print_logged;
+    struct timespec last_cycle; /* tv_sec == 0 before the first cycle */
+    time_t last_save;           /* monotonic seconds */
 };
 
 static struct daemon d; /* large; keep it off the stack */
@@ -75,7 +79,7 @@ static void print_line(const struct readings *r)
     print_val("motion", r->motion, 2, false);
     print_val("steps", r->steps, 0, false);
     print_val("db", r->db, 1, false);
-    putchar('\n');
+    printf(" health=%d mood=%s\n", d.pet.health, pet_mood_name(d.pet.mood));
     if (fflush(stdout) != 0 && !d.print_logged) {
         fprintf(stderr, "enkakumond: stdout: %s\n", strerror(errno));
         d.print_logged = true;
@@ -94,9 +98,23 @@ static void cycle(void)
     sensors_read(&d.sensors, &r, t0.tv_sec);
     mic_poll(&d.mic, t0.tv_sec);
     r.db = mic_db(&d.mic);
-    /* analysis: Step 3 */
 
-    int len = ipc_format_json(line, sizeof(line), time(NULL), &r);
+    double dt = d.last_cycle.tv_sec == 0 ? 1.0 : elapsed_ns(&d.last_cycle, &t0) / 1e9;
+    d.last_cycle = t0;
+    for (; d.ipc.taps > 0; d.ipc.taps--)
+        pet_tap(&d.pet);
+    pet_update(&d.pet, &r, dt);
+    struct pet_status ps = {
+        .health = d.pet.health,
+        .mood = pet_mood_name(d.pet.mood),
+        .worst = pet_worst(&d.pet, &r),
+    };
+    if (t0.tv_sec - d.last_save >= d.conf.pet_save_s) {
+        pet_save(&d.pet, d.conf.pet_path); /* logs its own failure */
+        d.last_save = t0.tv_sec;
+    }
+
+    int len = ipc_format_json(line, sizeof(line), time(NULL), &r, &ps);
     if (len > 0) {
         ipc_publish(&d.ipc, line, (size_t)len);
     } else if (!d.json_logged) {
@@ -286,8 +304,16 @@ int main(int argc, char **argv)
         goto cleanup;
     mic_ok = true;
 
+    pet_init(&d.pet, &d.conf);
+    if (pet_load(&d.pet, d.conf.pet_path) == 0)
+        fprintf(stderr, "enkakumond: pet: loaded %s (health %d)\n", d.conf.pet_path, d.pet.health);
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    d.last_save = now.tv_sec;
+
     fprintf(stderr, "enkakumond: running (conf %s, socket %s)\n", conf_path, d.conf.socket_path);
     rc = run();
+    if (rc == 0 && pet_save(&d.pet, d.conf.pet_path) == 0)
+        fprintf(stderr, "enkakumond: pet: saved %s (health %d)\n", d.conf.pet_path, d.pet.health);
 
 cleanup:
     if (sensors_ok)

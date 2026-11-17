@@ -219,13 +219,49 @@ static const char *num(char *dst, size_t size, double v, int decimals)
     return dst;
 }
 
-int ipc_format_json(char *buf, size_t size, time_t t, const struct readings *r)
+/* text as a JSON string literal (quotes included), or "null"; -1 if it won't fit.
+ * UTF-8 bytes pass through; quotes, backslashes and control bytes are escaped. */
+static int json_str(char *dst, size_t size, const char *text)
 {
-    char b[9][32];
+    size_t o = 0;
+
+    if (text == NULL)
+        return snprintf(dst, size, "null") < (int)size ? 0 : -1;
+    if (size < 3)
+        return -1;
+    dst[o++] = '"';
+    for (const unsigned char *s = (const unsigned char *)text; *s != '\0'; s++) {
+        char esc[8];
+        int n;
+        if (*s == '"' || *s == '\\')
+            n = snprintf(esc, sizeof(esc), "\\%c", *s);
+        else if (*s < 0x20)
+            n = snprintf(esc, sizeof(esc), "\\u%04x", *s);
+        else
+            n = snprintf(esc, sizeof(esc), "%c", *s);
+        if (o + (size_t)n + 2 > size)
+            return -1;
+        memcpy(dst + o, esc, (size_t)n);
+        o += (size_t)n;
+    }
+    dst[o++] = '"';
+    dst[o] = '\0';
+    return 0;
+}
+
+int ipc_format_json(char *buf, size_t size, time_t t, const struct readings *r,
+                    const struct pet_status *pet)
+{
+    char b[9][32], mood[32], worst[96];
+
+    if (json_str(mood, sizeof(mood), pet->mood) != 0 ||
+        json_str(worst, sizeof(worst), pet->worst) != 0)
+        return -1;
 
     int n = snprintf(buf, size,
                      "{\"t\":%lld,\"co2\":%s,\"temp_c\":%s,\"rh\":%s,\"voc\":%s,"
-                     "\"light\":%s,\"proximity\":%s,\"motion\":%s,\"steps\":%s,\"db\":%s}\n",
+                     "\"light\":%s,\"proximity\":%s,\"motion\":%s,\"steps\":%s,\"db\":%s,"
+                     "\"health\":%d,\"mood\":%s,\"worst\":%s}\n",
                      (long long)t,
                      num(b[0], sizeof(b[0]), r->co2, 0),
                      num(b[1], sizeof(b[1]), r->temp_c, 1),
@@ -235,7 +271,8 @@ int ipc_format_json(char *buf, size_t size, time_t t, const struct readings *r)
                      num(b[5], sizeof(b[5]), r->proximity, 0),
                      num(b[6], sizeof(b[6]), r->motion, 2),
                      num(b[7], sizeof(b[7]), r->steps, 0),
-                     num(b[8], sizeof(b[8]), r->db, 1));
+                     num(b[8], sizeof(b[8]), r->db, 1),
+                     pet->health, mood, worst);
     if (n < 0 || (size_t)n >= size)
         return -1;
     return n;
