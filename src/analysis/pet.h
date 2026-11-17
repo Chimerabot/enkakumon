@@ -55,8 +55,10 @@ void pet_init(struct pet *p, const struct conf *c);
 /* --- Rules: written by Navin (src/analysis/pet.c) --- */
 
 /* Called once per cycle with that cycle's readings (NAN = missing) and the
- * seconds since the previous call. Applies the minute rules, sleep and wake,
- * and sets p->mood. */
+ * seconds since the previous call; the readings count for those dt seconds
+ * (30 calls with dt = 1 are 30 s of sleep condition, 60 are a minute).
+ * Each call is one sample for the minute averages. Applies the minute
+ * rules, sleep and wake, and sets p->mood. */
 void pet_update(struct pet *p, const struct readings *r, double dt);
 
 /* A tap from the UI: wakes the pet if it is asleep. */
