@@ -1,16 +1,19 @@
 """
-main.py — enkakumon touchscreen UI: graphs of the daemon's readings.
+main.py — enkakumon touchscreen UI: the pet and graphs of the daemon's readings.
 
 Usage (from the activated venv): python src/ui/main.py [conf]
 
 One loop, no threads: select() waits up to POLL_S for a JSON line from the
 daemon, and touch is polled between waits. Each line is appended to a
-600-sample history per metric and the current screen is redrawn; a tap
-cycles the screen and sends "tap\\n" to the daemon.
+600-sample history per metric, the pet's latest state is kept, and the
+current screen is redrawn; a tap cycles the screen and sends "tap\\n" to
+the daemon (which also wakes a sleeping pet).
 
 Acceptance tests (on the Pi):
-  with the daemon running, the CO2 graph fills over time; taps cycle
-  CO2 -> Air quality -> Noise -> CO2 and respond in under 1 s; the screen
+  the Pet screen shows on start, with the mood, sprite, health bar and worst
+  reading from the daemon; with the daemon running, the CO2 graph fills over
+  time; taps cycle Pet -> CO2 -> Air quality -> Noise -> Pet and respond in
+  under 1 s; the screen
   updates every second without flicker; restarting the daemon shows
   "daemon offline" and then recovers, with the outage drawn as a gap. For
   the first minute after (re)connecting, missing Air quality reads "warming
@@ -30,7 +33,10 @@ import time
 import conf as confmod
 from display import HISTORY, Display
 
-# (title, JSON key, unit, warn level), in tap order
+# Screen 0 is the Pet; the graph screens follow in tap order.
+PET_SCREEN = 0
+MOODS = ("happy", "ok", "sick", "sleeping")
+# (title, JSON key, unit, warn level), graph screens in tap order
 SCREENS = (
     ("CO₂", "co2", "ppm", 1000),
     ("Air quality", "voc", "index", 150),
@@ -102,7 +108,9 @@ class DaemonClient:
 
 
 def parse_reading(line):
-    """Return {key: number or None} for the graphed keys, or None if malformed."""
+    """Return {key: number or None} for the graphed keys plus the pet's
+    "health" (int 0-100), "mood" and "worst" (str), each None if missing or
+    invalid; or None if the line is malformed."""
     try:
         data = json.loads(line)
     except (ValueError, UnicodeDecodeError):
@@ -113,6 +121,11 @@ def parse_reading(line):
     for _, key, _, _ in SCREENS:
         v = data.get(key)
         out[key] = v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+    health = data.get("health")
+    out["health"] = health if isinstance(health, int) and not isinstance(health, bool) \
+        and 0 <= health <= 100 else None
+    out["mood"] = data.get("mood") if data.get("mood") in MOODS else None
+    out["worst"] = data.get("worst") if isinstance(data.get("worst"), str) else None
     return out
 
 
@@ -139,8 +152,10 @@ def main(argv):
         return 2
 
     history = {key: collections.deque(maxlen=HISTORY) for _, key, _, _ in SCREENS}
+    pet = {"health": None, "mood": None, "worst": None}
     client = DaemonClient(conf["SOCKET_PATH"])
-    screen = 0
+    n_screens = 1 + len(SCREENS)
+    screen = PET_SCREEN
     next_connect = 0.0
     offline_shown = False
     bad_lines = 0
@@ -163,7 +178,7 @@ def main(argv):
                 disp.show_message("daemon offline")
                 offline_shown = True
             if disp.get_tap() is not None:
-                screen = (screen + 1) % len(SCREENS)
+                screen = (screen + 1) % n_screens
             time.sleep(POLL_S)
             continue
 
@@ -203,20 +218,25 @@ def main(argv):
                         for h in history.values():
                             h.append(None)
                 last_line_at = now
-                for key, value in reading.items():
-                    history[key].append(value)
+                for key, h in history.items():
+                    h.append(reading[key])
+                for key in pet:
+                    pet[key] = reading[key]
                 redraw = True
 
         if disp.get_tap() is not None:
-            screen = (screen + 1) % len(SCREENS)
+            screen = (screen + 1) % n_screens
             client.send_tap()
             redraw = True
 
         if redraw and got_line:
-            title, key, unit, warn = SCREENS[screen]
-            warming = time.monotonic() - connected_at < WARMUP_S.get(key, 0)
-            disp.draw_graph(title, unit, history[key], warn,
-                            "warming up" if warming else "sensor offline")
+            if screen == PET_SCREEN:
+                disp.draw_pet(pet["health"], pet["mood"], pet["worst"])
+            else:
+                title, key, unit, warn = SCREENS[screen - 1]
+                warming = time.monotonic() - connected_at < WARMUP_S.get(key, 0)
+                disp.draw_graph(title, unit, history[key], warn,
+                                "warming up" if warming else "sensor offline")
             redraw = False
 
     client.close()
