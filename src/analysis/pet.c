@@ -3,6 +3,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -31,26 +32,261 @@ const char *pet_mood_name(enum pet_mood m)
 
 /* ---------- rules: written by Navin ---------- */
 
+static void reset_minute(struct pet *p) 
+{
+    p->minute_sec = 0.0;
+    p->co2_sum = 0.0;
+    p->co2_count = 0;
+    p->voc_sum = 0.0;
+    p->voc_count = 0;
+    p->db_sum = 0.0;
+    p->db_count = 0;
+    p->temp_c_sum = 0.0;
+    p->temp_c_count = 0;
+    p->rh_sum = 0.0;
+    p->rh_count = 0;
+    p->motion_sum = 0.0;
+    p->motion_count = 0;
+    p->step_sum = 0.0;
+}
+
+/*Mood based on the Pet*/
+static void update_mood(struct pet *p) 
+{
+    if (p->asleep) {
+        p->mood = PET_SLEEPING;
+    } else if(p->health >= p->conf->pet_happy_min) {
+        p->mood = PET_HAPPY;
+    } else if(p->health >= p->conf->pet_ok_min) {
+        p->mood = PET_OK;
+    } else {
+        p->mood = PET_SICK;
+    }
+}
+
 void pet_update(struct pet *p, const struct readings *r, double dt)
 {
-    /* TODO(Navin): minute rules, sleep and wake, mood. See pet.h. */
-    (void)p;
-    (void)r;
-    (void)dt;
+
+    /* 1. Already asleep: check wake condition */
+    if(p->asleep) {
+        if(!isnan(r->motion) && r->motion > p->conf->pet_wake_motion) {
+            p->asleep = false;
+            p->sleep_sec = 0.0;
+            reset_minute(p);
+            update_mood(p);
+            return;
+        } else {
+            p->mood = PET_SLEEPING;
+            return;
+        }
+    }
+
+    /* 2. Awake: track continuous sleep condition */
+    bool covered = (!isnan(r->proximity) && r->proximity > p->conf->pet_sleep_proximity);
+    bool dark = (!isnan(r->light) && r->light < p->conf->pet_sleep_light);
+
+    if(covered || dark) {
+        p->sleep_sec += dt;
+        if(p->sleep_sec >= p->conf->pet_sleep_s) {
+            p->asleep = true;
+            reset_minute(p);
+            p->mood = PET_SLEEPING;
+            return;
+        }
+    } else {
+        p->sleep_sec = 0.0;
+    }
+
+    /* 3. Accumulate samples */
+    if(!isnan(r->co2)) {
+        p->co2_sum += r->co2;
+        p->co2_count++;
+    }
+    if(!isnan(r->voc)) {
+        p->voc_sum += r->voc;
+        p->voc_count++;
+    }
+    if(!isnan(r->db)) {
+        p->db_sum += r->db;
+        p->db_count++;
+    }
+    if(!isnan(r->temp_c)) {
+        p->temp_c_sum += r->temp_c;
+        p->temp_c_count++;
+    }
+    if(!isnan(r->rh)) {
+        p->rh_sum += r->rh;
+        p->rh_count++;
+    }
+    if(!isnan(r->motion)) {
+        p->motion_sum += r->motion;
+        p->motion_count++;
+    }
+
+    if (!isnan(r->steps)) {
+        if (p->has_last_steps) {
+            double diff = r->steps - p->last_steps;
+            if (diff > 0) {
+                p->step_sum += diff;
+            }
+        }
+        p->last_steps = r->steps;
+        p->has_last_steps = true;
+    }
+
+    /* 4. Evaluate minute rules */
+    p->minute_sec += dt;
+
+    if(p->minute_sec >= 60.0) {
+        bool co2_clean = true;
+        bool voc_clean = true;
+
+        if(p->co2_count > 0) {
+            double avg = p->co2_sum / p->co2_count;
+            if(avg > p->conf->pet_co2_bad) {
+                p->health -= 2;
+                co2_clean = false;
+            } else if (avg > p->conf->pet_co2_warn) {
+                p->health -= 1;
+                co2_clean = false;
+            }
+        }
+
+        /* VOC check*/
+        if(p->voc_count > 0) {
+            double avg = p->voc_sum / p->voc_count;
+            if(avg > p->conf->pet_voc_bad) {
+                p->health -= 2;
+                voc_clean = false;
+            } else if (avg > p->conf->pet_voc_warn) {
+                p->health -= 1;
+                voc_clean = false;
+            }
+        }
+
+        /*Noise Check*/
+        if(p->db_count > 0) {
+            double avg = p->db_sum / p->db_count;
+            if(avg > p->conf->pet_db_bad) {
+                p->health -= 2;
+            } else if (avg > p->conf->pet_db_warn) {
+                p->health -= 1;
+            }
+        }
+
+        /*temp/RH Check*/
+        bool temp_out = false;
+        bool rh_out = false;
+        if(p->temp_c_count > 0) {
+            double avg = p->temp_c_sum / p->temp_c_count;
+            if(avg < p->conf->pet_temp_min || avg > p->conf->pet_temp_max) {
+                temp_out = true;
+            }
+        }
+        if(p->rh_count > 0) {
+            double avg = p->rh_sum / p->rh_count;
+            if(avg < p->conf->pet_rh_min || avg > p->conf->pet_rh_max ) {
+                rh_out = true;
+            }
+        }
+        if(temp_out || rh_out) {
+            p->health -= 1;
+        }
+        /* Motion / steps check (+1 if either threshold is met, not both) */
+        bool active_motion = (p->motion_count > 0 && (p->motion_sum / p->motion_count) > p->conf->pet_active_motion);
+        bool active_steps = (p->step_sum >= p->conf->pet_active_steps);
+        if (active_motion || active_steps) {
+            p->health += 1;
+        }
+
+        /*clean air check (when CO2 and VOC are both in good/clean range)*/
+        if((p->co2_count > 0 || p->voc_count > 0) && co2_clean && voc_clean) {
+            p->health += 1;   
+        }
+
+        /* clamp health to 0..100*/
+        if(p->health > 100) {
+            p->health = 100;
+        } else if (p->health < 0) {
+            p->health = 0;
+        }
+        reset_minute(p);
+    }
+    update_mood(p);
 }
 
 void pet_tap(struct pet *p)
 {
-    /* TODO(Navin): wake the pet. See pet.h. */
-    (void)p;
+    if(p->asleep) {
+        p->asleep = false;
+        p->sleep_sec = 0.0;
+        reset_minute(p);
+    }
 }
 
+static int level(double v, double warn, double bad) 
+{
+    if(v > bad) {
+        return 2;
+    } else if (v > warn) {
+        return 1;
+    } else {
+        return 0;
+    }
+}
 const char *pet_worst(const struct pet *p, const struct readings *r)
 {
-    /* TODO(Navin): worst current reading as text, or NULL. See pet.h. */
-    (void)p;
-    (void)r;
-    return NULL;
+   int best_pen = 0;
+   const char *best_text = NULL;
+   int pen;
+   
+   /*1: CO2*/
+   pen = level(r->co2, p->conf->pet_co2_warn, p->conf->pet_co2_bad);
+   if(pen > best_pen) {
+    best_pen = pen;
+    best_text = "CO₂ high";
+   }
+
+   /*2: VOC*/
+   pen = level(r->voc, p->conf->pet_voc_warn, p->conf->pet_voc_bad);
+   if(pen > best_pen) {
+    best_pen = pen;
+    best_text = "Air quality poor";
+   }
+
+   /*3: Noise*/
+   pen = level(r->db, p->conf->pet_db_warn, p->conf->pet_db_bad);
+   if(pen > best_pen) {
+    best_pen = pen;
+    best_text = "Too noisy";
+   }
+
+   /*4: Temperature*/
+   if(r->temp_c < p->conf->pet_temp_min) {
+    if(1 > best_pen) {
+        best_pen = 1;
+        best_text = "Too cold";
+    }
+   } else if(r->temp_c > p->conf->pet_temp_max) {
+    if (1 > best_pen) {
+        best_pen = 1;
+        best_text = "Too hot";
+    }
+   }
+
+   /*5. Relative Humidity*/
+   if(r->rh < p->conf->pet_rh_min) {
+    if(1> best_pen) {
+        best_pen = 1;
+        best_text = "Too dry";
+    }
+   } else if(r->rh > p->conf->pet_rh_max) {
+    if(1 > best_pen) {
+        best_pen = 1;
+        best_text = "Too humid";
+    }
+   }
+   return best_text;
 }
 
 /* ---------- persistence ---------- */

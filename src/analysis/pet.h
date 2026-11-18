@@ -47,6 +47,23 @@ struct pet {
     /* Working state for the rules (minute accumulators, sleep timer).
      * Owned by pet_update: add the fields it needs here. pet_init and
      * pet_load zero them. */
+    double minute_sec;
+    double co2_sum;
+    int co2_count;
+    double voc_sum;
+    int voc_count;
+    double db_sum;
+    int db_count;
+    double temp_c_sum;
+    int temp_c_count;
+    double rh_sum;
+    int rh_count;
+    double motion_sum;
+    int motion_count;
+    double last_steps;
+    bool has_last_steps;
+    double step_sum;
+    double sleep_sec;
 };
 
 /* Defaults: health = PET_HEALTH_START, awake, working state zeroed. */
