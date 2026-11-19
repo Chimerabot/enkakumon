@@ -104,6 +104,28 @@ The fix:
  
 - My judgment: Tinting the sprite for now gave me an idea of how the sprite will look but it also gave me an idea of how the sprite will look when the colors for the different modes are present and shown whenever the device runs. Tinting the sprite gave me an outline of the sprite and once the color modes are shown, which will be, in the demo video it shows me whether tinting the sprite caused the colors to mix with the tinting or if the colors of the modes do not appear at all.
 
+### Episode 3: Writing the health rules
+Date / session: Nov 18, 2026, 
+
+- What I asked: for review only. I wrote pet_update, pet_tap and pet_worst myself against the tests the agent wrote first.
+- What the agent did: reviewed each version and pointed to line numbers. It didn't write rule code.
+- Progress: failures went 45 → 39 → 23 → 20 → 13 → 12 → 0 as I added mood, CO₂, the other rules, steps, sleep/wake and pet_worst.
+- Bugs caught in review:
+- VOC average divided by co2_count, which is a divide-by-zero when there's no CO₂ reading.
+- An extra } closed the minute block early.
+- step_sum was never reset.
+- The reset_minute call was missing after I moved the resets into the helper.
+- Line 450: the waking motion counted as activity, so health was 79 instead of 78. The test comment said "whether the waking call counts or not", which was wrong. The agent corrected the comment and kept the check, and I made the waking call return early.
+- Evidence: 153 checks, 0 failures; make asan and make memcheck both exit 0.
+
+- My judgment: I choose to write the rules myself and asked only for review, because it gave me an idea of what the pet needed to keep in track of while also seeing how each rule, like C02 levels, air quaility, temperature, and noise level, just to name a few, are going to be calcuted and how the code for each rule was running the pet based on changes and  patterns that can occur when the pet is put into use.
+- The bug taught me what can happen if an overload of data occurs within the pet. If the extra cycle/run happened, then the data and cycles that the pet was able to collect before can put a road block for giving the user the best possbile read of data for what the pet was able to collect. Adding extra cycles who have caused future errors where the pet might read in data that's false and wasn't needed for the current readings it was trying to collect.
+- Yes, I agree with keeping == 78. A single shake to wake the pet isn't exercise, and if it's counted alongside 59 NAN readings, that one jolt skews the whole minute's average and falsely triggers an activity bonus. Ending the wake-up call early keeps waking and sleeping symmetrical—and ensures that the bug was fixed rather than weakening the test to match broken behavior
+
+Outcome / what I'd do differently:
+
+- All sleep/wake and pet_worst tests now pass. Next time, I'd test incrementally after each state transition rather than implementing multiple branches at once, and double-check pointer member access (p->conf->...) and boundary returns as I write them.
+
 
 ### Candidates (facts only — not yet annotated)
 
