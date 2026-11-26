@@ -13,19 +13,19 @@ All additions must be made under the following assumptions:
 
 ## UI Details
 
-The UI for the enkakumon system will have two main sides: Pet and Data. Pet contains all the tamagotchi-like digital pet game elements; Data contains graphs showing sensor data from the past 48 hours, scrollable in the same way it is now.
+The UI for the enkakumon system will have two main sides: Pet and Data. Pet contains all the tamagotchi-like digital pet game elements; Data contains graphs showing sensor data from the past 48 hours, one metric per screen as it is now.
 
 Two buttons at the bottom of the touchscreen ("Pet" and "Data") will allow users to switch between these modes at will.
 
 The color scheme should be black-on-white for both the pet and the data graphs, with colors where necessary to convey important information. Otherwise, monochrome should be preferred.
 
-Use the `pirkkala.ttf` font for text. Use text minimally.
+Use the `assets/pirkkala.ttf` font for text. Use text minimally. Pirkkala is a pixel font: render it only at 16, 32 or 48 px, where it stays crisp. It covers ASCII only, with no subscript or degree glyphs, so on-screen text must be ASCII (`display.py` already renders "CO₂" as "CO2").
 
 ## UX Architecture
 
 **Pet:**
 - Visuals: The pet's state will be conveyed via the pixel art sprites in `assets/enkakumon-sprite.png`. Each frame is 100x100 pixels. The first is the normal (idle) state; the second is the sleeping state; the third is the unhealthy state; and the last is the dead state. More may be added eventually, but for now, these static frames will visually convey the pet's state.
-- Health: The pet's health will be managed by an overarching `int` variable `health`, which ranges from 1-100 as a percentage health value. It defaults to `100` when the program first starts. The unhealthy state begins at `health = 50`, and dead at `0`. 
+- Health: The pet's health will be managed by an overarching `int` variable `health`, which ranges from 0-100 as a percentage health value. It defaults to `100` when the program first starts. The unhealthy state begins at `health = 50`, and dead at `0`. 
 - Health calculations: `health` should update once every five minutes, adding or subtracting `1` based on whether environmentally significant variables ([air quality variables, noise levels, proximity]) have improved or declined during that period. This should be decided based on whether these significant variables are on either side of [deciding values for variables].
 - Surprises: On occasion, the pet should make use of its non-environmentally significant sensors to give the user surprise tasks which change its health by more significant amounts.
      - Color sensor: The pet asks to see a certain color. If the request is fulfilled within 30 seconds, `health += 15`; if not `health -= 15`.
@@ -36,5 +36,7 @@ Use the `pirkkala.ttf` font for text. Use text minimally.
 - Data: `health` should be periodically saved to memory so that the pet's data is not lost when shutting down the Pi (a shutdown should simply freeze its stats and already-read data, not reset it or delete it).
 
 **Data:**
-- Visuals: Panda graphs, as are currently implemented. They can be cycled using a dedicated button at the top of the screen.
+- Visuals: line graphs drawn with Pillow by `render_graph` in `src/ui/display.py`, as currently implemented. Each screen shows one metric (CO2 in ppm, air quality as the VOC index, noise in dB SPL). From top to bottom it has the title, the current value in large text with its unit, and a line graph with min/max labels on the y axis and time labels on the x axis. Text is black at 16 px for the title and labels and 48 px for the value; secondary text (unit, axis labels, status messages) is grey. Missing samples break the line, and when the latest value is missing a status message ("sensor offline", "warming up") replaces the value.
+- Color: color is used only for warn levels. A dashed orange line marks the metric's warn level (CO2 1000 ppm, VOC 150, noise 70 dB). The current value turns orange above the warn level and red above 1.5× it.
+- Navigation: the metric screens are cycled using a dedicated button at the top of the screen. (Until the buttons are built, a tap anywhere cycles them.)
 - Time: Another button at the top of the screen cycles through time periods. The maximum should be the full 48-hour data saving period, and the minimum should be the past hour. If the device detects that there has been a skip in time (i.e. the device has been powered off for some period of time), a graphical line should be simply rendered on the graph to indicate that there has been a time skip (assuming this is possible).

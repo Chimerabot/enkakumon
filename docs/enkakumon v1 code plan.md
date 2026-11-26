@@ -9,17 +9,17 @@ Oct 27, 2026 (rev 3: C core + Python UI); status updated Nov 13, 2026 · @Gideon
 | 1. Sensor daemon (C) | **Done** | M1, merged in PR #1 (pedometer registers corrected afterwards in "Fix pedometer") |
 | 2. Graphs on the touchscreen (Python UI) | **Done** | M2, merged in PR #2 |
 
-All sensors in the hardware table are connected, the SCD40 included. The health system is specified in a separate plan; `src/main.c` marks where it hooks into the cycle (`/* analysis: Step 3 */`). Until it exists, the daemon counts IPC taps but does not use them.
+All sensors in the hardware table are connected, the SCD40 included. The health system and the rest of the pet UX are specified in `enkakumon ux.md`, which takes precedence over this plan wherever they differ; `src/main.c` marks where it hooks into the cycle (`/* analysis: Step 3 */`). Until it exists, the daemon counts IPC taps but does not use them.
 
 ## Context and rules
 
 You are writing code for a sensor-equipped tamagotchi-style device: a Raspberry Pi Zero 2 W with environmental sensors and a 2.8" touchscreen. A virtual pet's health reflects the air and activity around it. You have no other context; everything you need is here and in `docs/CLAUDE.md`, which takes precedence.
 
-**Architecture:** a C daemon, `enkakumond`, reads every sensor and will run the health system (planned separately). A Python UI talks to it over a local Unix socket and drives the touchscreen.
+**Architecture:** a C daemon, `enkakumond`, reads every sensor and will run the health system (specified in `enkakumon ux.md`). A Python UI talks to it over a local Unix socket and drives the touchscreen.
 
 ```
 src/       C17 daemon: sensors, mic, IPC, config      (systems core)
-src/analysis/  C health system                         (graded mechanism; not yet created, planned separately)
+src/analysis/  C health system                         (graded mechanism; not yet created, see enkakumon ux.md)
 src/vendor/    Sensirion gas index algorithm (BSD-3; gas-index-algorithm @ 2ef9f13)
 src/ui/        Python: display, touch, screens        (no graded logic)
 src/tools/     Python: bring-up scripts (sensors.py and its config.py); test/hwtest.py
@@ -119,28 +119,8 @@ All I2C devices share `/dev/i2c-1` (raw `ioctl(I2C_RDWR)` in C; `board.I2C()` in
 | Noise | `db` (dB SPL) | 70 |
 
 - `null` values draw as gaps, and the screen shows "sensor offline".
-- Colors: white on black. The current value turns orange above warn and red above 1.5× warn.
+- Style (updated to `enkakumon ux.md`): black on white in the Pirkkala pixel font (`assets/pirkkala.ttf`, 16 and 48 px), with grey secondary text. Color is used only for warn levels: a dashed orange warn line, and the current value turns orange above warn and red above 1.5× warn. `blank()` stays black, as the screen-off state.
 
-## Step 3: Barebones health system (C)
-
-**Files:** `src/analysis/pet.c`, `src/analysis/pet.h`, `test/test_pet.c`; update `src/main.c`, `src/ipc.c`, `enkakumon.conf`, `src/ui/display.py` and `src/ui/main.py`.
-
-- `pet.c`: a `struct pet` with `health` (0–100, starting at 80) and `mood` (`happy` / `ok` / `sick` / `sleeping`), plus `pet_update(&pet, &readings, dt)`, `pet_tap(&pet)`, and save/load to `PET_PATH` (default `~/enkakumon/pet.state`, `key=value`). Save every 60 s and on clean exit, writing to a temp file, then `fsync`, then `rename`. A missing or corrupt file falls back to the defaults and logs it.
-- Health changes once per minute by the sum of these rules (all values in `enkakumon.conf`):
-
-| Condition | Health per minute |
-| --- | --- |
-| `co2` > 1000 / > 1500 ppm | −1 / −2 |
-| `voc` > 150 / > 250 | −1 / −2 |
-| `db` > 70 / > 85 | −1 / −2 |
-| `temp_c` outside 18–26 or `rh` outside 30–60 % | −1 |
-| ≥ 20 new `steps` or average `motion` > 0.5 in the last minute | +1 |
-| All air readings below their first threshold | +1 |
-
-- Sleep: `proximity` > 200 or `light` very low for 30 s → `sleeping`, and the rules pause. Any tap (`tap` over IPC) or motion wakes it.
-- Mood from health: ≥ 70 `happy`, 40–69 `ok`, < 40 `sick`. Clamp health to 0–100. `null` readings are skipped.
-- IPC: add `"health"`, `"mood"` and `"worst"` (the worst current reading as text, e.g. `"CO₂ high"`, or `null`) to the JSON line.
-- Display: add a **Pet** screen first in the tap cycle. It shows a simple face (circle, eyes and mouth drawn with Pillow) colored by mood, a health bar, and `worst` as one line of text.
-- Tests cover each rule and their sum, clamping, skipping nulls, sleep entry and wake, mood boundaries, and save/load round-trip including a corrupt file.
+This step records the UI as built. Its tap-anywhere navigation and 10-minute history are superseded by `enkakumon ux.md` for all later work.
 
 **Acceptance:** with the daemon running, `python src/ui/main.py` shows the CO₂ graph filling over time. Taps cycle CO₂ → Air quality → Noise → CO₂. The screen updates every second without flicker, and taps respond in under 1 s. Restarting the daemon makes the UI show "daemon offline" and then recover, with the outage drawn as a gap. With `MAX_CLIENTS` other clients connected, the UI stays on "daemon offline" without flicker. Ctrl-C or SIGTERM blanks the screen and exits 0.

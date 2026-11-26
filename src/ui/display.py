@@ -9,7 +9,8 @@ Run on its own to calibrate touch: python src/ui/display.py prints raw x/y
 and the extremes seen; copy them into TOUCH_* in enkakumon.conf.
 
 Acceptance tests (on the Pi):
-  draw_graph shows the title, the current value in large text (white, orange
+  Everything is black on white in the Pirkkala pixel font (assets/pirkkala.ttf).
+  draw_graph shows the title, the current value in large text (black, orange
   above warn, red above 1.5x warn), up to 600 samples as a line graph with
   min/max labels and a dashed warn line; None values leave gaps, and a None
   latest value shows missing_text ("sensor offline" unless the caller says
@@ -18,6 +19,7 @@ Acceptance tests (on the Pi):
   press; touching the top-left corner gives roughly (0, 0).
   An unplugged touch controller is logged once and retried every RETRY_S.
 """
+import os
 import sys
 import time
 
@@ -26,11 +28,16 @@ from PIL import Image, ImageDraw, ImageFont
 WIDTH, HEIGHT = 240, 320
 HISTORY = 600  # samples per graph: 10 minutes at 1 Hz
 
+# Black on white; color only where it carries meaning (warn levels).
 BLACK = (0, 0, 0)
 WHITE = (255, 255, 255)
-GREY = (120, 120, 120)
-ORANGE = (255, 165, 0)
-RED = (255, 48, 48)
+GREY = (110, 110, 110)
+ORANGE = (215, 110, 0)  # darker than pure orange so it reads on white
+RED = (200, 0, 0)
+BG, FG = WHITE, BLACK
+
+# Pirkkala is a pixel font: it renders crisply only at multiples of 16 px.
+SMALL, MEDIUM, LARGE = 16, 32, 48
 
 # Graph area
 GX0, GX1 = 44, 232
@@ -39,15 +46,15 @@ GY0, GY1 = 100, 292
 RELEASE_READS = 3  # consecutive unpressed reads (~150 ms) that end a press
 
 _FONT_PATHS = (
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "assets", "pirkkala.ttf"),
+    # Fallbacks if the asset is missing:
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",   # Debian / Raspberry Pi OS
     "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",  # Fedora / RHEL
 )
 _fonts = {}
-_fallback_font = False
 
 
 def _font(size):
-    global _fallback_font
     if size not in _fonts:
         for path in _FONT_PATHS:
             try:
@@ -57,13 +64,12 @@ def _font(size):
                 continue
         else:
             _fonts[size] = ImageFont.load_default()
-            _fallback_font = True
     return _fonts[size]
 
 
 def _text(text):
-    # The built-in bitmap font has no subscript digits.
-    return text.replace("₂", "2") if _fallback_font else text
+    # Pirkkala (and the built-in bitmap fallback) has no subscript digits.
+    return text.replace("₂", "2")
 
 
 def _log(msg):
@@ -75,7 +81,7 @@ def value_color(value, warn):
         return RED
     if value > warn:
         return ORANGE
-    return WHITE
+    return FG
 
 
 def format_value(value):
@@ -86,20 +92,20 @@ def format_value(value):
 
 def render_graph(title, unit, values, warn_level, missing_text="sensor offline"):
     """Return a WIDTH x HEIGHT image of one metric's graph."""
-    img = Image.new("RGB", (WIDTH, HEIGHT), BLACK)
+    img = Image.new("RGB", (WIDTH, HEIGHT), BG)
     d = ImageDraw.Draw(img)
-    small, title_font, big = _font(12), _font(18), _font(44)
+    small, title_font, big = _font(SMALL), _font(SMALL), _font(LARGE)
 
     values = list(values)[-HISTORY:]
     latest = values[-1] if values else None
-    d.text((8, 6), _text(title), font=title_font, fill=WHITE)
+    d.text((8, 8), _text(title), font=title_font, fill=FG)
     if latest is not None:
         text = format_value(latest)
         d.text((8, 32), text, font=big, fill=value_color(latest, warn_level))
-        d.text((12 + d.textlength(text, font=big), 58), unit, font=_font(16), fill=GREY)
+        d.text((14 + d.textlength(text, font=big), 62), _text(unit), font=small, fill=GREY)
     else:
-        d.text((8, 46), "no data yet" if not values else missing_text,
-               font=_font(22), fill=GREY)
+        d.text((8, 50), "no data yet" if not values else missing_text,
+               font=small, fill=GREY)
 
     # Y range covers the data and the warn level, so the warn line is always shown.
     nums = [v for v in values if v is not None]
@@ -137,19 +143,19 @@ def render_graph(title, unit, values, warn_level, missing_text="sensor offline")
             run.append((xpos(i), ypos(v)))
             continue
         if len(run) == 1:
-            d.point(run, fill=WHITE)
+            d.point(run, fill=FG)
         elif run:
-            d.line(run, fill=WHITE)
+            d.line(run, fill=FG)
         run = []
     return img
 
 
 def render_message(text):
-    img = Image.new("RGB", (WIDTH, HEIGHT), BLACK)
+    img = Image.new("RGB", (WIDTH, HEIGHT), BG)
     d = ImageDraw.Draw(img)
-    font = _font(22)
-    d.text(((WIDTH - d.textlength(text, font=font)) / 2, HEIGHT / 2 - 12),
-           text, font=font, fill=WHITE)
+    font = _font(SMALL)
+    d.text(((WIDTH - d.textlength(text, font=font)) / 2, HEIGHT / 2 - 8),
+           text, font=font, fill=FG)
     return img
 
 
