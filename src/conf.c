@@ -19,7 +19,6 @@ struct key {
 };
 
 static const struct key keys[] = {
-    { "SAMPLE_HZ", K_INT, offsetof(struct conf, sample_hz) },
     { "RETRY_S", K_INT, offsetof(struct conf, retry_s) },
     { "I2C_DEV", K_STR, offsetof(struct conf, i2c_dev) },
     { "TEMP_OFFSET_C", K_DBL, offsetof(struct conf, temp_offset_c) },
@@ -34,31 +33,21 @@ static const struct key keys[] = {
     { "HEARTBEAT_PATH", K_STR, offsetof(struct conf, heartbeat_path) },
     { "PET_PATH", K_STR, offsetof(struct conf, pet_path) },
     { "PET_SAVE_S", K_INT, offsetof(struct conf, pet_save_s) },
-    { "PET_HEALTH_START", K_INT, offsetof(struct conf, pet_health_start) },
-    { "PET_CO2_WARN", K_DBL, offsetof(struct conf, pet_co2_warn) },
-    { "PET_CO2_BAD", K_DBL, offsetof(struct conf, pet_co2_bad) },
-    { "PET_VOC_WARN", K_DBL, offsetof(struct conf, pet_voc_warn) },
-    { "PET_VOC_BAD", K_DBL, offsetof(struct conf, pet_voc_bad) },
-    { "PET_DB_WARN", K_DBL, offsetof(struct conf, pet_db_warn) },
-    { "PET_DB_BAD", K_DBL, offsetof(struct conf, pet_db_bad) },
-    { "PET_TEMP_MIN", K_DBL, offsetof(struct conf, pet_temp_min) },
-    { "PET_TEMP_MAX", K_DBL, offsetof(struct conf, pet_temp_max) },
-    { "PET_RH_MIN", K_DBL, offsetof(struct conf, pet_rh_min) },
-    { "PET_RH_MAX", K_DBL, offsetof(struct conf, pet_rh_max) },
-    { "PET_ACTIVE_STEPS", K_INT, offsetof(struct conf, pet_active_steps) },
-    { "PET_ACTIVE_MOTION", K_DBL, offsetof(struct conf, pet_active_motion) },
-    { "PET_SLEEP_PROXIMITY", K_DBL, offsetof(struct conf, pet_sleep_proximity) },
-    { "PET_SLEEP_LIGHT", K_DBL, offsetof(struct conf, pet_sleep_light) },
+    { "PET_CO2_MAX", K_DBL, offsetof(struct conf, pet_co2_max) },
+    { "PET_VOC_MAX", K_DBL, offsetof(struct conf, pet_voc_max) },
+    { "PET_DB_MAX", K_DBL, offsetof(struct conf, pet_db_max) },
+    { "PET_PROXIMITY_MAX", K_DBL, offsetof(struct conf, pet_prox_max) },
+    { "PET_DARK_LIGHT", K_DBL, offsetof(struct conf, pet_dark_light) },
     { "PET_SLEEP_S", K_INT, offsetof(struct conf, pet_sleep_s) },
-    { "PET_WAKE_MOTION", K_DBL, offsetof(struct conf, pet_wake_motion) },
-    { "PET_HAPPY_MIN", K_INT, offsetof(struct conf, pet_happy_min) },
-    { "PET_OK_MIN", K_INT, offsetof(struct conf, pet_ok_min) },
+    { "PET_COLOR_RATIO", K_DBL, offsetof(struct conf, pet_color_ratio) },
+    { "PET_WALK_STEPS", K_INT, offsetof(struct conf, pet_walk_steps) },
+    { "PET_MUSIC_DB", K_DBL, offsetof(struct conf, pet_music_db) },
+    { "PET_MUSIC_S", K_INT, offsetof(struct conf, pet_music_s) },
 };
 
 void conf_defaults(struct conf *c)
 {
     memset(c, 0, sizeof(*c));
-    c->sample_hz = 1;
     c->retry_s = 30;
     strcpy(c->i2c_dev, "/dev/i2c-1");
     c->temp_offset_c = 0.0;
@@ -72,27 +61,18 @@ void conf_defaults(struct conf *c)
     c->max_clients = 4;
     strcpy(c->heartbeat_path, "/dev/shm/enkakumon.heartbeat");
 
-    strcpy(c->pet_path, "~/enkakumon/pet.state");
+    strcpy(c->pet_path, "pet.state");
     c->pet_save_s = 60;
-    c->pet_health_start = 80;
-    c->pet_co2_warn = 1000;
-    c->pet_co2_bad = 1500;
-    c->pet_voc_warn = 150;
-    c->pet_voc_bad = 250;
-    c->pet_db_warn = 70;
-    c->pet_db_bad = 85;
-    c->pet_temp_min = 18;
-    c->pet_temp_max = 26;
-    c->pet_rh_min = 30;
-    c->pet_rh_max = 60;
-    c->pet_active_steps = 20;
-    c->pet_active_motion = 0.5;
-    c->pet_sleep_proximity = 200;
-    c->pet_sleep_light = 10;
+    c->pet_co2_max = 1000;
+    c->pet_voc_max = 150;
+    c->pet_db_max = 70;
+    c->pet_prox_max = 200;
+    c->pet_dark_light = 10;
     c->pet_sleep_s = 30;
-    c->pet_wake_motion = 1.0;
-    c->pet_happy_min = 70;
-    c->pet_ok_min = 40;
+    c->pet_color_ratio = 1.5;
+    c->pet_walk_steps = 10;
+    c->pet_music_db = 60;
+    c->pet_music_s = 5;
 }
 
 static char *trim(char *s)
@@ -140,9 +120,7 @@ static int validate(const struct conf *c, const char *path)
 {
     const char *bad = NULL;
 
-    if (c->sample_hz != 1)
-        bad = "SAMPLE_HZ must be 1 (the gas index algorithm needs exactly 1 s)";
-    else if (c->retry_s < 1)
+    if (c->retry_s < 1)
         bad = "RETRY_S must be >= 1";
     else if (c->max_clients < 1 || c->max_clients > 64)
         bad = "MAX_CLIENTS must be 1..64";
@@ -155,17 +133,10 @@ static int validate(const struct conf *c, const char *path)
     else if (c->i2c_dev[0] == '\0' || c->socket_path[0] == '\0' || c->heartbeat_path[0] == '\0' ||
              c->pet_path[0] == '\0')
         bad = "I2C_DEV, SOCKET_PATH, HEARTBEAT_PATH and PET_PATH must not be empty";
-    else if (c->pet_save_s < 1 || c->pet_sleep_s < 1 || c->pet_active_steps < 1)
-        bad = "PET_SAVE_S, PET_SLEEP_S and PET_ACTIVE_STEPS must be >= 1";
-    else if (c->pet_health_start < 0 || c->pet_health_start > 100)
-        bad = "PET_HEALTH_START must be 0..100";
-    else if (!(c->pet_co2_warn < c->pet_co2_bad && c->pet_voc_warn < c->pet_voc_bad &&
-               c->pet_db_warn < c->pet_db_bad))
-        bad = "each PET_*_WARN must be below its PET_*_BAD";
-    else if (!(c->pet_temp_min < c->pet_temp_max && c->pet_rh_min < c->pet_rh_max))
-        bad = "PET_TEMP_MIN/PET_RH_MIN must be below their _MAX";
-    else if (!(0 <= c->pet_ok_min && c->pet_ok_min < c->pet_happy_min && c->pet_happy_min <= 100))
-        bad = "need 0 <= PET_OK_MIN < PET_HAPPY_MIN <= 100";
+    else if (c->pet_save_s < 1 || c->pet_sleep_s < 1 || c->pet_walk_steps < 1 || c->pet_music_s < 1)
+        bad = "PET_SAVE_S, PET_SLEEP_S, PET_WALK_STEPS and PET_MUSIC_S must be >= 1";
+    else if (c->pet_color_ratio < 1.0)
+        bad = "PET_COLOR_RATIO must be >= 1";
 
     if (bad != NULL) {
         fprintf(stderr, "enkakumond: conf: %s: %s\n", path, bad);

@@ -1,0 +1,26 @@
+# enkakumon-ui.service — the touchscreen UI; starts at boot after the daemon.
+#
+# Installed and enabled with enkakumon.service by: make && sudo make install
+#
+# Acceptance tests: after a reboot the Pet screen appears with no login;
+# killing the UI makes systemd restart it; exit 1 (config error) is not
+# restarted.
+
+[Unit]
+Description=enkakumon touchscreen UI
+Wants=enkakumon.service
+After=enkakumon.service
+
+[Service]
+Type=simple
+User=enkakumon
+SupplementaryGroups=gpio spi i2c
+WorkingDirectory=/home/enkakumon/enkakumon
+ExecStart=/home/enkakumon/enkakumon-env/bin/python src/ui/main.py enkakumon.conf
+Restart=on-failure
+RestartSec=2
+RestartPreventExitStatus=1
+TimeoutStopSec=5
+
+[Install]
+WantedBy=multi-user.target

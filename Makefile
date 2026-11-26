@@ -4,6 +4,8 @@
 #   make test       unit tests
 #   make asan       unit tests under AddressSanitizer + UBSan
 #   make memcheck   unit tests under valgrind
+#   sudo make install  install and enable both systemd units, so the daemon
+#                   and the UI start at every boot (run make first)
 #   make soakcheck  run the daemon for SOAK_S seconds (default 1 h) and fail if
 #                   RSS grows after warmup, the fd count changes, the heartbeat
 #                   goes stale, or SIGTERM does not exit 0. Do not leave socket
@@ -28,7 +30,7 @@ SOAK_S        ?= 3600
 SOAK_WARMUP_S ?= 60
 SOAK_CONF     ?= enkakumon.conf
 
-.PHONY: all test asan memcheck soakcheck clean
+.PHONY: all test asan memcheck soakcheck install clean
 .SECONDARY:
 
 all: enkakumond
@@ -93,6 +95,12 @@ soakcheck: enkakumond
 	kill -TERM $$pid; rc=0; wait $$pid || rc=$$?; \
 	[ $$rc -eq 0 ] || fail "SIGTERM exit status $$rc"; \
 	echo "soakcheck: PASS"
+
+install:
+	@test -x enkakumond || { echo 'install: run make first (as your user)'; exit 1; }
+	install -m 644 enkakumon.service enkakumon-ui.service /etc/systemd/system/
+	systemctl daemon-reload
+	systemctl enable --now enkakumon.service enkakumon-ui.service
 
 clean:
 	rm -rf build enkakumond

@@ -30,7 +30,8 @@ struct readings {
     double temp_c;
     double rh;
     double voc;
-    double light;
+    double light;      /* APDS9960 clear channel */
+    double red, green, blue; /* APDS9960 color channels (not published) */
     double proximity;
     double motion;
     double steps;

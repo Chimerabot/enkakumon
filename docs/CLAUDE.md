@@ -23,7 +23,7 @@ logged. The 48-hour soak is the test suite of last resort.
 power: keep code appropriately lightweight.
 - Systems core: C17, -Wall -Wextra -Werror, no VLAs.
 goto-cleanup for multi-resource functions.
-- Python permitted only under tools/ and ui/. No graded mechanism
+- Python permitted only under ui/. No graded mechanism
 may live there.
 - Smallest diff that passes. Do not refactor unrelated code.
 ## Workflow

@@ -1,103 +1,79 @@
 /*
- * pet.h — the enkakumon health system: health, mood, sleep, persistence.
+ * pet.h — the enkakumon health system (docs/enkakumon ux.md).
  *
- * Rules (code plan Step 3; thresholds are PET_* keys in enkakumon.conf):
- *   Once per minute of awake time, health changes by the sum of:
- *     co2 minute average  > CO2_WARN / > CO2_BAD     -1 / -2
- *     voc minute average  > VOC_WARN / > VOC_BAD     -1 / -2
- *     db  minute average  > DB_WARN  / > DB_BAD      -1 / -2
- *     temp_c outside TEMP_MIN..TEMP_MAX or rh outside RH_MIN..RH_MAX    -1
- *     >= ACTIVE_STEPS new steps, or average motion > ACTIVE_MOTION      +1
- *     co2 and voc (those with samples) all <= their WARN, at least one  +1
- *   Averages use only non-null samples; a reading with no samples that
- *   minute does not count. A step count that goes backwards (sensor reset)
- *   counts as 0 new steps. Health is clamped to 0..100.
- *   Sleep: proximity > SLEEP_PROXIMITY or light < SLEEP_LIGHT continuously
- *   for SLEEP_S seconds -> asleep; rules pause. A tap or motion >
- *   WAKE_MOTION wakes it, and the minute starts over.
- *   Mood: sleeping while asleep; else health >= HAPPY_MIN happy,
- *   >= OK_MIN ok, otherwise sick.
+ * Health is 0..100 and starts at 100. Every PET_UPDATE_S of awake time it
+ * moves by 1: -1 if the average of any significant reading (co2, voc, db,
+ * proximity) is above its PET_*_MAX, else +1 (no change if none had samples).
+ * State: dead at 0; sleeping while dark (light < PET_DARK_LIGHT, not covered)
+ * for PET_SLEEP_S; unhealthy at <= 50; otherwise idle. Sleep pauses updates
+ * and surprises. A dead pet stays dead until a tap hatches a new one.
  *
- * Persistence: pet_save writes key=value lines to <path>.tmp, fsyncs it,
- * renames it over <path> and fsyncs the directory, so after a power cut the
- * file holds the old state or the new one, never a mix. pet_load falls back
- * to the defaults (and logs why) when the file is missing or corrupt.
+ * Surprises: every 10-20 min awake, a task runs for PET_TASK_S. Done in
+ * time: +15; not: -15. Color: the asked channel is >= PET_COLOR_RATIO times
+ * each other channel. Walk: PET_WALK_STEPS new steps. Music: PET_MUSIC_S
+ * seconds at >= PET_MUSIC_DB.
  *
- * Acceptance tests (test/test_pet.c): each rule and their sum, clamping,
- * skipping nulls, sleep entry and wake, mood boundaries, save/load
- * round-trip, missing and corrupt files, and no .tmp left behind.
+ * Persistence: "health=N" in PET_PATH, written to a temp file, fsynced and
+ * renamed, so a power cut leaves the old file or the new one, never a mix.
+ *
+ * Acceptance tests (test/test_pet.c): update rule and averaging, null
+ * skipping, clamping, states, sleep and wake, death and hatching, each task's
+ * success and timeout, save/load round-trip and corrupt files.
  */
 #ifndef ENKAKUMON_PET_H
 #define ENKAKUMON_PET_H
 
 #include <stdbool.h>
-#include <stddef.h>
 
 #include "conf.h"
 #include "sensors.h"
 
-enum pet_mood { PET_HAPPY, PET_OK, PET_SICK, PET_SLEEPING };
+#define PET_HEALTH_START 100
+#define PET_UNHEALTHY_AT 50  /* health at or below this is unhealthy */
+#define PET_UPDATE_S 300.0   /* health moves once per 5 min of awake time */
+#define PET_TASK_S 30.0      /* time to complete a surprise */
+#define PET_TASK_REWARD 15
+#define PET_TASK_GAP_MIN 600 /* seconds between surprises: 10..20 min */
+#define PET_TASK_GAP_MAX 1200
+
+/* Same order as the frames in assets/enkakumon-sprite.png. */
+enum pet_state { PET_IDLE, PET_SLEEPING, PET_UNHEALTHY, PET_DEAD };
+enum pet_task { TASK_NONE, TASK_RED, TASK_GREEN, TASK_BLUE, TASK_WALK, TASK_MUSIC, TASK_COUNT };
+enum { SIG_CO2, SIG_VOC, SIG_DB, SIG_PROX, SIG_COUNT }; /* significant readings */
 
 struct pet {
-    const struct conf *conf; /* thresholds (PET_* keys) */
-    int health;              /* 0..100 */
-    enum pet_mood mood;      /* recomputed by every pet_update */
+    const struct conf *conf;
+    int health;
     bool asleep;
-
-    /* Working state for the rules (minute accumulators, sleep timer).
-     * Owned by pet_update: add the fields it needs here. pet_init and
-     * pet_load zero them. */
-    double minute_sec;
-    double co2_sum;
-    int co2_count;
-    double voc_sum;
-    int voc_count;
-    double db_sum;
-    int db_count;
-    double temp_c_sum;
-    int temp_c_count;
-    double rh_sum;
-    int rh_count;
-    double motion_sum;
-    int motion_count;
-    double last_steps;
-    bool has_last_steps;
-    double step_sum;
-    double sleep_sec;
+    double dark_s;            /* how long it has been dark */
+    double window_s;          /* awake time in the current update window */
+    double sum[SIG_COUNT];
+    int n[SIG_COUNT];
+    enum pet_task task;
+    double task_s;            /* time left on the task, or until the next one */
+    double progress;          /* steps (walk) or loud seconds (music) */
+    double last_steps;        /* NAN until the first step count */
 };
 
-/* Defaults: health = PET_HEALTH_START, awake, working state zeroed. */
 void pet_init(struct pet *p, const struct conf *c);
 
-/* --- Rules: written by Navin (src/analysis/pet.c) --- */
-
-/* Called once per cycle with that cycle's readings (NAN = missing) and the
- * seconds since the previous call; the readings count for those dt seconds
- * (30 calls with dt = 1 are 30 s of sleep condition, 60 are a minute).
- * Each call is one sample for the minute averages. Applies the minute
- * rules, sleep and wake, and sets p->mood. */
+/* One cycle of readings (NAN = missing), dt seconds after the last one. */
 void pet_update(struct pet *p, const struct readings *r, double dt);
 
-/* A tap from the UI: wakes the pet if it is asleep. */
+/* A tap on the pet: hatches a new pet if this one is dead. */
 void pet_tap(struct pet *p);
 
-/* The worst current reading as short text ("CO₂ high", "Too noisy"...),
- * or NULL if every reading is within its WARN range. */
-const char *pet_worst(const struct pet *p, const struct readings *r);
+/* Starts a surprise now (pet_update picks them at random). */
+void pet_start_task(struct pet *p, enum pet_task t);
 
-/* --- Helpers and persistence --- */
-
-const char *pet_mood_name(enum pet_mood m);
-
-/* Expands a leading "~/" using $HOME. Returns 0, or -1 if it does not fit
- * or $HOME is unset. */
-int pet_expand_path(char *out, size_t size, const char *path);
+enum pet_state pet_state(const struct pet *p);
+const char *pet_state_name(enum pet_state s);
+const char *pet_task_name(enum pet_task t); /* NULL for TASK_NONE */
 
 /* Returns 0, or -1 after logging (the previous file is left intact). */
 int pet_save(const struct pet *p, const char *path);
 
-/* Returns 0 if the file was loaded; otherwise logs why, applies the
- * defaults (pet_init) and returns -1. */
+/* Returns 0 if loaded; otherwise logs why, keeps the defaults, returns -1. */
 int pet_load(struct pet *p, const char *path);
 
 #endif

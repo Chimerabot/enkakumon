@@ -1,6 +1,6 @@
 # enkakumon V1 Code Plan
 
-Oct 27, 2026 (rev 3: C core + Python UI); status updated Nov 13, 2026 · @Gideon
+Oct 27, 2026 (rev 3: C core + Python UI); status updated Nov 25, 2026 · @Gideon
 
 ## Status
 
@@ -8,30 +8,30 @@ Oct 27, 2026 (rev 3: C core + Python UI); status updated Nov 13, 2026 · @Gideon
 | --- | --- | --- |
 | 1. Sensor daemon (C) | **Done** | M1, merged in PR #1 (pedometer registers corrected afterwards in "Fix pedometer") |
 | 2. Graphs on the touchscreen (Python UI) | **Done** | M2, merged in PR #2 |
+| 3. Pet and UX (`enkakumon ux.md`) | **Done** except the 48-hour Data view | M3, PR #3, then reworked to the UX doc |
 
-All sensors in the hardware table are connected, the SCD40 included. The health system and the rest of the pet UX are specified in `enkakumon ux.md`, which takes precedence over this plan wherever they differ; `src/main.c` marks where it hooks into the cycle (`/* analysis: Step 3 */`). Until it exists, the daemon counts IPC taps but does not use them.
+All sensors in the hardware table are connected, the SCD40 included. The health system and the rest of the pet UX are specified in `enkakumon ux.md`, which takes precedence over this plan wherever they differ. Both programs start at boot from systemd (`make && sudo make install`).
 
 ## Context and rules
 
 You are writing code for a sensor-equipped tamagotchi-style device: a Raspberry Pi Zero 2 W with environmental sensors and a 2.8" touchscreen. A virtual pet's health reflects the air and activity around it. You have no other context; everything you need is here and in `docs/CLAUDE.md`, which takes precedence.
 
-**Architecture:** a C daemon, `enkakumond`, reads every sensor and will run the health system (specified in `enkakumon ux.md`). A Python UI talks to it over a local Unix socket and drives the touchscreen.
+**Architecture:** a C daemon, `enkakumond`, reads every sensor and runs the health system (specified in `enkakumon ux.md`). A Python UI talks to it over a local Unix socket and drives the touchscreen.
 
 ```
 src/       C17 daemon: sensors, mic, IPC, config      (systems core)
-src/analysis/  C health system                         (graded mechanism; not yet created, see enkakumon ux.md)
+src/analysis/  C health system                         (graded mechanism: pet.c)
 src/vendor/    Sensirion gas index algorithm (BSD-3; gas-index-algorithm @ 2ef9f13)
 src/ui/        Python: display, touch, screens        (no graded logic)
-src/tools/     Python: bring-up scripts (sensors.py and its config.py); test/hwtest.py
-test/      C unit tests run by make test / asan / memcheck (test_main.c)
+test/      C unit tests run by make test / asan / memcheck (test_main.c, test_pet.c)
 ```
 
 **Environment:**
 
 - Raspberry Pi OS Lite 64-bit, headless. Reach it with `ssh enkakumon@enkakumon.local` on the same network. I2C, SPI and audio overlays enabled. Already set up.
 - Add: `sudo apt install build-essential libasound2-dev valgrind socat git`.
-- Python venv at `~/enkakumon-env` with `adafruit-blinka`, `numpy`, `sounddevice`, `adafruit-circuitpython-scd4x`, `-sgp40`, `-apds9960`, `-lsm6ds`, `-tsc2007`, `-rgb-display`, plus system Pillow. The UI needs only blinka, `-tsc2007`, `-rgb-display` and Pillow. The sensor libraries are used only by `src/tools/sensors.py` and `src/tools/test/hwtest.py`.
-- Repo: a clone of the GitHub repo at `~/enkakumon/`. Code may be written elsewhere, but it is built, run and validated only on the Pi: `git pull && make`. Run the daemon with `./enkakumond [conf]` and the UI with `python src/ui/main.py` from the activated venv.
+- Python venv at `~/enkakumon-env` with `adafruit-blinka`, `adafruit-circuitpython-tsc2007` and `adafruit-circuitpython-rgb-display`, plus system Pillow (the UI's only dependencies; `enkakumon-ui.service` runs this venv's python).
+- Repo: a clone of the GitHub repo at `~/enkakumon/`. Code may be written elsewhere, but it is built, run and validated only on the Pi: `git pull && make`. `sudo make install` (once) installs and enables `enkakumon.service` and `enkakumon-ui.service`, which start the daemon and the UI at every boot. For testing, run `./enkakumond --print [conf]` or `python src/ui/main.py` by hand.
 
 **Rules:**
 
@@ -46,13 +46,13 @@ test/      C unit tests run by make test / asan / memcheck (test_main.c)
 
 ## Hardware reference
 
-Use the datasheet and the matching Adafruit Python driver as references for each part. `src/tools/sensors.py` already works on this hardware, so you can compare its output with the C daemon's. Sensirion parts use 16-bit big-endian commands, and each data word is followed by a CRC-8 (poly 0x31, init 0xFF; `0xBEEF` → `0x92`).
+Use the datasheet and the matching Adafruit Python driver as references for each part. Sensirion parts use 16-bit big-endian commands, and each data word is followed by a CRC-8 (poly 0x31, init 0xFF; `0xBEEF` → `0x92`).
 
 | Device | Bus / address or pins | Reference driver | Notes |
 | --- | --- | --- | --- |
 | SCD40 (CO₂, temp, RH) | I2C 0x62 | `adafruit_scd4x.SCD4X` | Start periodic 0x21B1; data-ready 0xE4B8 (ready if low 11 bits ≠ 0); read 0xEC05 → CO₂ ppm, T = −45 + 175·raw/65535, RH = 100·raw/65535. New data every 5 s. Stop 0x3F86 (wait 500 ms) on exit. Apply `TEMP_OFFSET_C` |
 | SGP40 (VOC index) | I2C 0x59 | `adafruit_sgp40.SGP40` | Measure raw 0x260F + RH ticks (RH·65535/100) + T ticks ((T+45)·65535/175), wait 30 ms, read word. Feed raw to the vendored `GasIndexAlgorithm_process` **every 1 s exactly**. Index 0–500, \~100 = normal |
-| APDS9960 (light, proximity) | I2C 0x39 | `adafruit_apds9960.apds9960.APDS9960` | ENABLE 0x80 = PON\|AEN\|PEN; proximity PDATA 0x9C (0–255); clear channel CDATA 0x94–0x95 |
+| APDS9960 (light, proximity) | I2C 0x39 | `adafruit_apds9960.apds9960.APDS9960` | ENABLE 0x80 = PON\|AEN\|PEN; proximity PDATA 0x9C (0–255); clear, red, green, blue at 0x94–0x9B (16-bit LE each) |
 | LSM6DSOX (motion) | I2C 0x6A | `adafruit_lsm6ds.lsm6dsox.LSM6DSOX` | WHO_AM_I 0x0F = 0x6C; CTRL1_XL 0x10 (≥ 26 Hz, ±2 g); accel at 0x28 (6 bytes, 0.061 mg/LSB). Pedometer is in the embedded-functions bank: FUNC_CFG_ACCESS 0x01 = 0x80 selects it, 0x00 returns. In that bank, PEDO_EN is EMB_FUNC_EN_A 0x04 bit 3, PEDO_RST_STEP is EMB_FUNC_SRC 0x64 bit 7, and STEP_COUNTER is 0x62/0x63 (unsigned 16-bit). Do not copy the Adafruit driver's `pedometer_*`: it uses LSM6DS33 registers. |
 | TSC2007 (touch) | I2C 0x48 | `adafruit_tsc2007.TSC2007` (UI, Python) | `touched`, `touch` → raw x/y/pressure; map to pixels with min/max in config |
 | ILI9341 display, 240×320 | SPI CE0, D/C = GPIO 25, RST = GPIO 24 | `adafruit_rgb_display.ili9341.ILI9341` (UI, Python) | Draw with Pillow, push with `disp.image(img)`; baudrate 24 MHz; full redraw \~0.2 s |
@@ -63,18 +63,19 @@ All I2C devices share `/dev/i2c-1` (raw `ioctl(I2C_RDWR)` in C; `board.I2C()` in
 
 ## Daemon contract (used by every step)
 
-- **Loop:** single-threaded, with an absolute 1 s `timerfd` driving SCD40 → SGP40 → APDS9960 → LSM6DSOX → mic → (analysis, once the health system exists) → publish, in that order. The mic captures on its own pthread with blocking `snd_pcm_readi`, `MIC_PERIOD_FRAMES` (0.1 s) per read, and keeps a mutex-guarded ring covering ~1 s of per-period mean squares. A cycle that takes over 100 ms is logged, and so are missed timer ticks.
+- **Loop:** single-threaded, with an absolute 1 s `timerfd` driving SCD40 → SGP40 → APDS9960 → LSM6DSOX → mic → pet → publish, in that order. The mic captures on its own pthread with blocking `snd_pcm_readi`, `MIC_PERIOD_FRAMES` (0.1 s) per read, and keeps a mutex-guarded ring covering ~1 s of per-period mean squares. A cycle that takes over 100 ms is logged, and so are missed timer ticks.
 - **IPC:** a Unix stream socket at `SOCKET_PATH`, up to `MAX_CLIENTS`. Each second the daemon sends every client one JSON line, with `null` for missing values:
-  `{"t":<unix s>,"co2":612,"temp_c":22.4,"rh":41.0,"voc":98,"light":530,"proximity":3,"motion":0.04,"steps":120,"db":41.3}`
+  `{"t":<unix s>,"co2":612,"temp_c":22.4,"rh":41.0,"voc":98,"light":530,"proximity":3,"motion":0.04,"steps":120,"db":41.3,"health":80,"state":"idle","task":null}`
+  `state` is `idle`, `sleeping`, `unhealthy` or `dead`; `task` is the running surprise (`red`, `green`, `blue`, `walk`, `music`) or `null`. `tap` from a client hatches a new pet if it is dead.
   Clients may send `tap\n`. Any other input is ignored, and input lines over 64 bytes are thrown away. A slow or broken client is dropped, never waited on: a send that would block, or that is short, drops the client. Connections beyond `MAX_CLIENTS` are accepted and closed at once. At startup a stale socket file is unlinked, but if another daemon is still serving the path the daemon exits 2.
 - **Supervision:** shipped as `enkakumon.service` (systemd, `Restart=on-failure`, `RestartSec=2`, `RestartPreventExitStatus=1`; runs as user `enkakumon` with the `i2c` and `audio` groups). The daemon touches `HEARTBEAT_PATH` once at startup, before the first cycle, and then every cycle. SIGTERM or SIGINT, delivered through a `signalfd`, stops it cleanly: stop the SCD40, close all fds, unlink the socket, exit 0. Exit 1 means a config error; exit 2 means the socket, timer or another non-sensor resource is unusable. A missing sensor is never fatal.
 - **Make targets:** `make` builds `enkakumond`. `make test`, `make asan` (AddressSanitizer + UBSan) and `make memcheck` (valgrind) run `test/`. `make soakcheck` runs the daemon for `SOAK_S` (default 1 h). After a `SOAK_WARMUP_S` (60 s) warmup it fails if RSS grows, the fd count changes, the heartbeat gets more than 5 s old, or SIGTERM doesn't exit 0. Keep socket clients disconnected during the soak, because they change the fd count.
 
 ## Step 1: Sensor daemon (C)
 
-**Files:** `Makefile`, `enkakumon.service`; `src/main.c`, `src/conf.c`, `src/i2c.c`, `src/sensors.c` (the four I2C devices and the CRC), `src/mic.c`, `src/ipc.c`, each with a `.h`; `test/test_main.c`. Already in place before Step 1: `enkakumon.conf`, `.gitignore`, `src/vendor/sensirion_gas_index_algorithm.{c,h}` (do not modify), and `src/tools/` (the Python reference).
+**Files:** `Makefile`, `enkakumon.service`; `src/main.c`, `src/conf.c`, `src/i2c.c`, `src/sensors.c` (the four I2C devices and the CRC), `src/mic.c`, `src/ipc.c`, each with a `.h`; `test/test_main.c`. Already in place before Step 1: `enkakumon.conf`, `.gitignore`, `src/vendor/sensirion_gas_index_algorithm.{c,h}` (do not modify), and the Python bring-up scripts (since removed).
 
-- `enkakumon.conf`: `SAMPLE_HZ = 1`, `RETRY_S = 30`, `I2C_DEV = /dev/i2c-1`, `TEMP_OFFSET_C = 0.0`, `DEFAULT_TEMP_C = 25.0` and `DEFAULT_RH = 50.0` (used for SGP40 compensation until the SCD40 has data), `MIC_NAME = googlevoicehat`, `MIC_RATE = 48000`, `MIC_PERIOD_FRAMES = 4800`, `DB_OFFSET = 120.0`, `SOCKET_PATH = /tmp/enkakumon.sock`, `MAX_CLIENTS = 4`, `HEARTBEAT_PATH = /dev/shm/enkakumon.heartbeat`, and the display settings `DC_PIN = 25`, `RST_PIN = 24`, `SPI_BAUD = 24000000`.
+- `enkakumon.conf`: `RETRY_S = 30`, `I2C_DEV = /dev/i2c-1`, `TEMP_OFFSET_C = 0.0`, `DEFAULT_TEMP_C = 25.0` and `DEFAULT_RH = 50.0` (used for SGP40 compensation until the SCD40 has data), `MIC_NAME = googlevoicehat`, `MIC_RATE = 48000`, `MIC_PERIOD_FRAMES = 4800`, `DB_OFFSET = 120.0`, `SOCKET_PATH = /tmp/enkakumon.sock`, `MAX_CLIENTS = 4`, `HEARTBEAT_PATH = /dev/shm/enkakumon.heartbeat`, and the display settings `DC_PIN = 25`, `RST_PIN = 24`, `SPI_BAUD = 24000000`.
 - Readings published each second:
 
 | Key | Unit | Source |
@@ -121,6 +122,6 @@ All I2C devices share `/dev/i2c-1` (raw `ioctl(I2C_RDWR)` in C; `board.I2C()` in
 - `null` values draw as gaps, and the screen shows "sensor offline".
 - Style (updated to `enkakumon ux.md`): black on white in the Pirkkala pixel font (`assets/pirkkala.ttf`, 16 and 48 px), with grey secondary text. Color is used only for warn levels: a dashed orange warn line, and the current value turns orange above warn and red above 1.5× warn. `blank()` stays black, as the screen-off state.
 
-This step records the UI as built. Its tap-anywhere navigation and 10-minute history are superseded by `enkakumon ux.md` for all later work.
+This step records the UI as first built. Since then it follows `enkakumon ux.md`: Pet and Data buttons replace tap-anywhere cycling, the Pet side comes first, `display.py` exposes `render_pet`, `render_graph` and `render_message` (pushed with `show`), and warn lines come from the `PET_*_MAX` keys.
 
 **Acceptance:** with the daemon running, `python src/ui/main.py` shows the CO₂ graph filling over time. Taps cycle CO₂ → Air quality → Noise → CO₂. The screen updates every second without flicker, and taps respond in under 1 s. Restarting the daemon makes the UI show "daemon offline" and then recover, with the outage drawn as a gap. With `MAX_CLIENTS` other clients connected, the UI stays on "daemon offline" without flicker. Ctrl-C or SIGTERM blanks the screen and exits 0.

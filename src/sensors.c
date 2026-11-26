@@ -28,7 +28,7 @@
 #define APDS_ATIME 0x81
 #define APDS_CONTROL 0x8F
 #define APDS_ID 0x92
-#define APDS_CDATAL 0x94
+#define APDS_CDATAL 0x94 /* clear, red, green, blue: 4 x 16-bit LE */
 #define APDS_PDATA 0x9C
 #define APDS_ENABLE_PON_AEN_PEN 0x07
 
@@ -55,7 +55,8 @@ static const char *const dev_names[DEV_COUNT] = { "scd40", "sgp40", "apds9960", 
 void readings_clear(struct readings *r)
 {
     r->co2 = r->temp_c = r->rh = r->voc = NAN;
-    r->light = r->proximity = r->motion = r->steps = r->db = NAN;
+    r->light = r->red = r->green = r->blue = NAN;
+    r->proximity = r->motion = r->steps = r->db = NAN;
 }
 
 /* ---------- pure helpers ---------- */
@@ -343,17 +344,20 @@ static int apds_init(struct sensors *s)
 
 static void apds_cycle(struct sensors *s, struct readings *r, time_t now)
 {
-    uint8_t prox, c[2];
+    uint8_t prox, c[8];
 
     if (!dev_ready(s, DEV_APDS9960, now, apds_init, "init"))
         return;
     if (reg_read(s->fd, APDS9960_ADDR, APDS_PDATA, &prox, 1) != 0 ||
-        reg_read(s->fd, APDS9960_ADDR, APDS_CDATAL, c, 2) != 0) {
+        reg_read(s->fd, APDS9960_ADDR, APDS_CDATAL, c, sizeof(c)) != 0) {
         dev_fail(s, DEV_APDS9960, "read", now);
         return;
     }
     r->proximity = prox;
     r->light = (uint16_t)(c[0] | (c[1] << 8));
+    r->red = (uint16_t)(c[2] | (c[3] << 8));
+    r->green = (uint16_t)(c[4] | (c[5] << 8));
+    r->blue = (uint16_t)(c[6] | (c[7] << 8));
 }
 
 /* ---------- LSM6DSOX ---------- */

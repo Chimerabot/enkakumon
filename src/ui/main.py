@@ -1,26 +1,19 @@
 """
-main.py — enkakumon touchscreen UI: the pet and graphs of the daemon's readings.
+main.py — enkakumon touchscreen UI (docs/enkakumon ux.md): the Pet and Data
+sides, fed by the daemon's JSON lines.
 
-Usage (from the activated venv): python src/ui/main.py [conf]
+Usage: python src/ui/main.py [conf]   (run at boot by enkakumon-ui.service)
 
-One loop, no threads: select() waits up to POLL_S for a JSON line from the
-daemon, and touch is polled between waits. Each line is appended to a
-600-sample history per metric, the pet's latest state is kept, and the
-current screen is redrawn; a tap cycles the screen and sends "tap\\n" to
-the daemon (which also wakes a sleeping pet).
+One loop, no threads: select() waits up to POLL_S for a line from the daemon
+and touch is polled between waits. The bottom buttons switch Pet / Data; on
+Data the top button cycles the metric; on Pet a tap is sent to the daemon
+(it hatches a new pet if this one is dead).
 
 Acceptance tests (on the Pi):
-  the Pet screen shows on start, with the mood, sprite, health bar and worst
-  reading from the daemon; with the daemon running, the CO2 graph fills over
-  time; taps cycle Pet -> CO2 -> Air quality -> Noise -> Pet and respond in
-  under 1 s; the screen
-  updates every second without flicker; restarting the daemon shows
-  "daemon offline" and then recovers, with the outage drawn as a gap. For
-  the first minute after (re)connecting, missing Air quality reads "warming
-  up" (the SGP40 index is null for 45 s after the daemon starts). With
-  MAX_CLIENTS other clients connected, the UI stays on "daemon offline",
-  logs the refusal once, and does not flicker. Ctrl-C or SIGTERM blanks the
-  screen and exits 0.
+  the Pet side shows on start; buttons respond in under 1 s; the CO2 graph
+  fills over time; restarting the daemon shows "daemon offline", then
+  recovers with the outage drawn as a gap; SIGTERM blanks the screen and
+  exits 0 (1 = config error, 2 = display init failed).
 """
 import collections
 import json
@@ -31,48 +24,42 @@ import sys
 import time
 
 import conf as confmod
-from display import HISTORY, Display
+import display as ui
 
-# Screen 0 is the Pet; the graph screens follow in tap order.
-PET_SCREEN = 0
-MOODS = ("happy", "ok", "sick", "sleeping")
-# (title, JSON key, unit, warn level), graph screens in tap order
-SCREENS = (
-    ("CO₂", "co2", "ppm", 1000),
-    ("Air quality", "voc", "index", 150),
-    ("Noise", "db", "dB SPL", 70),
+# (title, JSON key, unit, config key of the warn level)
+METRICS = (
+    ("CO₂", "co2", "ppm", "PET_CO2_MAX"),
+    ("Air quality", "voc", "index", "PET_VOC_MAX"),
+    ("Noise", "db", "dB SPL", "PET_DB_MAX"),
 )
-RETRY_S = 2.0      # reconnect interval while the daemon is unreachable
-POLL_S = 0.05      # select timeout = touch polling interval
-MAX_LINE = 4096    # longer "lines" are garbage; drop them
-GAP_S = 2.5        # a longer silence is recorded as missing samples
-# Keys that are null while the daemon warms up, and for how long (s) after
-# connecting a missing value means "warming up" rather than "sensor offline".
-WARMUP_S = {"voc": 60}
+RETRY_S = 2.0   # reconnect interval while the daemon is unreachable
+POLL_S = 0.05   # select timeout = touch polling interval
+GAP_S = 2.5     # a longer silence is recorded as missing samples
 
 
 def log(msg):
     print(f"enkakumon-ui: {msg}", file=sys.stderr, flush=True)
 
 
+def number(v):
+    return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
 class DaemonClient:
     """Non-blocking connection to the daemon's Unix socket."""
 
     def __init__(self, path):
-        self.path = path
-        self.sock = None
-        self._buf = b""
+        self.path, self.sock, self._buf = path, None, b""
 
     def connect(self):
-        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)  # non-inheritable by default
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         s.setblocking(False)
         try:
             s.connect(self.path)
         except OSError:
             s.close()
             return False
-        self.sock = s
-        self._buf = b""
+        self.sock, self._buf = s, b""
         return True
 
     def close(self):
@@ -93,40 +80,13 @@ class DaemonClient:
                 return None
             self._buf += chunk
         *lines, self._buf = self._buf.split(b"\n")
-        if len(self._buf) > MAX_LINE:
-            log("dropping an over-long line from the daemon")
-            self._buf = b""
         return lines
 
     def send_tap(self):
         try:
             self.sock.send(b"tap\n")
-        except (BlockingIOError, InterruptedError):
-            pass  # the daemon is behind; a lost tap is harmless
         except OSError:
-            pass  # read_lines will notice the disconnect
-
-
-def parse_reading(line):
-    """Return {key: number or None} for the graphed keys plus the pet's
-    "health" (int 0-100), "mood" and "worst" (str), each None if missing or
-    invalid; or None if the line is malformed."""
-    try:
-        data = json.loads(line)
-    except (ValueError, UnicodeDecodeError):
-        return None
-    if not isinstance(data, dict):
-        return None
-    out = {}
-    for _, key, _, _ in SCREENS:
-        v = data.get(key)
-        out[key] = v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
-    health = data.get("health")
-    out["health"] = health if isinstance(health, int) and not isinstance(health, bool) \
-        and 0 <= health <= 100 else None
-    out["mood"] = data.get("mood") if data.get("mood") in MOODS else None
-    out["worst"] = data.get("worst") if isinstance(data.get("worst"), str) else None
-    return out
+            pass  # a lost tap is harmless; read_lines notices a disconnect
 
 
 def main(argv):
@@ -146,98 +106,79 @@ def main(argv):
     signal.signal(signal.SIGINT, on_signal)
 
     try:
-        disp = Display(conf)
+        disp = ui.Display(conf)
     except Exception as e:  # any driver/pin/SPI problem: nothing to show it on
         log(f"display init failed: {e}")
         return 2
 
-    history = {key: collections.deque(maxlen=HISTORY) for _, key, _, _ in SCREENS}
-    pet = {"health": None, "mood": None, "worst": None}
+    history = {key: collections.deque(maxlen=ui.HISTORY) for _, key, _, _ in METRICS}
+    pet = {}
     client = DaemonClient(conf["SOCKET_PATH"])
-    n_screens = 1 + len(SCREENS)
-    screen = PET_SCREEN
-    next_connect = 0.0
+    side, metric = "pet", 0
+    live = False           # a line has arrived on this connection
     offline_shown = False
-    bad_lines = 0
-    redraw = False
-    got_line = False      # a reading has arrived on this connection
-    connected_at = 0.0    # when this connection's first reading arrived
-    last_line_at = None   # when the latest reading arrived; kept across reconnects
-    refused_logged = False
+    next_connect = 0.0
+    last_line_at = None    # kept across reconnects, so outages become gaps
 
     while not stop:
-        now = time.monotonic()
-        if client.sock is None and now >= next_connect:
-            if client.connect():
-                got_line = False  # the screen changes only once data arrives
-            else:
-                next_connect = now + RETRY_S
-
+        if client.sock is None and time.monotonic() >= next_connect and not client.connect():
+            next_connect = time.monotonic() + RETRY_S
         if client.sock is None:
             if not offline_shown:
-                disp.show_message("daemon offline")
+                disp.show(ui.render_message("daemon offline"))
                 offline_shown = True
-            if disp.get_tap() is not None:
-                screen = (screen + 1) % n_screens
             time.sleep(POLL_S)
             continue
 
-        readable, _, _ = select.select([client.sock], [], [], POLL_S)
-        if readable:
+        redraw = False
+        if select.select([client.sock], [], [], POLL_S)[0]:
             lines = client.read_lines()
             if lines is None:
-                if got_line:
+                if live:  # a refusal (MAX_CLIENTS) before any data stays quiet
                     log("daemon disconnected")
-                elif not refused_logged:
-                    # The daemon closes clients beyond MAX_CLIENTS straight away.
-                    log(f"daemon closed the connection before sending data "
-                        f"(MAX_CLIENTS reached?); retrying every {RETRY_S:.0f} s")
-                    refused_logged = True
+                    offline_shown = False
                 client.close()
-                got_line = False
+                live = False
                 next_connect = time.monotonic() + RETRY_S
                 continue
             for line in lines:
-                reading = parse_reading(line)
-                if reading is None:
-                    bad_lines += 1
-                    if bad_lines == 1 or bad_lines % 100 == 0:
-                        log(f"ignored {bad_lines} malformed line(s)")
+                try:
+                    data = json.loads(line)
+                except ValueError:
                     continue
-                now = time.monotonic()
-                if not got_line:
+                if not isinstance(data, dict):
+                    continue
+                if not live:
                     log(f"connected to {client.path}")
-                    got_line = True
-                    connected_at = now
-                    offline_shown = False
-                    refused_logged = False
-                # Record an outage as missing samples, so the graph shows a gap
-                # instead of joining across it.
+                    live = True
+                now = time.monotonic()
                 if last_line_at is not None and now - last_line_at > GAP_S:
-                    for _ in range(min(HISTORY, round(now - last_line_at) - 1)):
+                    for _ in range(min(ui.HISTORY, round(now - last_line_at) - 1)):
                         for h in history.values():
                             h.append(None)
                 last_line_at = now
-                for key, h in history.items():
-                    h.append(reading[key])
-                for key in pet:
-                    pet[key] = reading[key]
+                for _, key, _, _ in METRICS:
+                    history[key].append(number(data.get(key)))
+                pet = data
                 redraw = True
 
-        if disp.get_tap() is not None:
-            screen = (screen + 1) % n_screens
-            client.send_tap()
+        tap = disp.get_tap()
+        if tap is not None:
+            x, y = tap
+            if y >= ui.NAV_Y:
+                side = "pet" if x < ui.WIDTH // 2 else "data"
+            elif side == "data" and y < ui.TOP_H:
+                metric = (metric + 1) % len(METRICS)
+            elif side == "pet":
+                client.send_tap()
             redraw = True
 
-        if redraw and got_line:
-            if screen == PET_SCREEN:
-                disp.draw_pet(pet["health"], pet["mood"], pet["worst"])
+        if redraw and live:
+            if side == "pet":
+                disp.show(ui.render_pet(number(pet.get("health")), pet.get("state"), pet.get("task")))
             else:
-                title, key, unit, warn = SCREENS[screen - 1]
-                warming = time.monotonic() - connected_at < WARMUP_S.get(key, 0)
-                disp.draw_graph(title, unit, history[key], warn,
-                                "warming up" if warming else "sensor offline")
-            redraw = False
+                title, key, unit, warn_key = METRICS[metric]
+                disp.show(ui.render_graph(title, unit, history[key], conf[warn_key]))
 
     client.close()
     disp.blank()

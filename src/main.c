@@ -22,6 +22,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/signalfd.h>
 #include <sys/stat.h>
@@ -79,7 +80,7 @@ static void print_line(const struct readings *r)
     print_val("motion", r->motion, 2, false);
     print_val("steps", r->steps, 0, false);
     print_val("db", r->db, 1, false);
-    printf(" health=%d mood=%s\n", d.pet.health, pet_mood_name(d.pet.mood));
+    printf(" health=%d state=%s\n", d.pet.health, pet_state_name(pet_state(&d.pet)));
     if (fflush(stdout) != 0 && !d.print_logged) {
         fprintf(stderr, "enkakumond: stdout: %s\n", strerror(errno));
         d.print_logged = true;
@@ -106,8 +107,8 @@ static void cycle(void)
     pet_update(&d.pet, &r, dt);
     struct pet_status ps = {
         .health = d.pet.health,
-        .mood = pet_mood_name(d.pet.mood),
-        .worst = pet_worst(&d.pet, &r),
+        .state = pet_state_name(pet_state(&d.pet)),
+        .task = pet_task_name(d.pet.task),
     };
     if (t0.tv_sec - d.last_save >= d.conf.pet_save_s) {
         pet_save(&d.pet, d.conf.pet_path); /* logs its own failure */
@@ -304,16 +305,16 @@ int main(int argc, char **argv)
         goto cleanup;
     mic_ok = true;
 
+    srandom((unsigned)time(NULL)); /* surprise timing */
     pet_init(&d.pet, &d.conf);
-    if (pet_load(&d.pet, d.conf.pet_path) == 0)
-        fprintf(stderr, "enkakumond: pet: loaded %s (health %d)\n", d.conf.pet_path, d.pet.health);
+    pet_load(&d.pet, d.conf.pet_path); /* on failure it logs and keeps a new pet */
     clock_gettime(CLOCK_MONOTONIC, &now);
     d.last_save = now.tv_sec;
 
     fprintf(stderr, "enkakumond: running (conf %s, socket %s)\n", conf_path, d.conf.socket_path);
     rc = run();
-    if (rc == 0 && pet_save(&d.pet, d.conf.pet_path) == 0)
-        fprintf(stderr, "enkakumond: pet: saved %s (health %d)\n", d.conf.pet_path, d.pet.health);
+    if (rc == 0)
+        pet_save(&d.pet, d.conf.pet_path); /* a clean stop freezes the pet */
 
 cleanup:
     if (sensors_ok)

@@ -13,7 +13,6 @@
 #define CONF_STR_MAX 108
 
 struct conf {
-    int sample_hz;
     int retry_s;
     char i2c_dev[CONF_STR_MAX];
     double temp_offset_c;
@@ -30,19 +29,13 @@ struct conf {
     /* Health system (src/analysis/pet.c) */
     char pet_path[CONF_STR_MAX];
     int pet_save_s;
-    int pet_health_start;
-    double pet_co2_warn, pet_co2_bad;
-    double pet_voc_warn, pet_voc_bad;
-    double pet_db_warn, pet_db_bad;
-    double pet_temp_min, pet_temp_max;
-    double pet_rh_min, pet_rh_max;
-    int pet_active_steps;
-    double pet_active_motion;
-    double pet_sleep_proximity;
-    double pet_sleep_light;
+    double pet_co2_max, pet_voc_max, pet_db_max, pet_prox_max;
+    double pet_dark_light;
     int pet_sleep_s;
-    double pet_wake_motion;
-    int pet_happy_min, pet_ok_min;
+    double pet_color_ratio;
+    int pet_walk_steps;
+    double pet_music_db;
+    int pet_music_s;
 };
 
 void conf_defaults(struct conf *c);
