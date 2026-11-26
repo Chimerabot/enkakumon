@@ -30,12 +30,13 @@ Use the `assets/pirkkala.ttf` font for text. Use text minimally. Pirkkala is a p
 
   | Variable | Sensor | Bad side |
   | --- | --- | --- |
-  | CO2 | SCD40 | above 1000 ppm |
+  | CO2 | SCD40 | above 1300 ppm |
+  | Temperature | SCD40 | above 30 °C |
   | Air quality (VOC index) | SGP40 | above 150 |
   | Noise | microphone | above 70 dB SPL |
   | Proximity | APDS9960 | above 200 of 255 (the pet is covered) |
 
-  Each variable is averaged over the five minutes, skipping missing readings. If any average is on the bad side, `health -= 1`; otherwise `health += 1`. If no variable had readings, health does not change. Health stays within 0-100. The first three values are also the Data graphs' warn lines.
+  Each variable is averaged over the five minutes, skipping missing readings. If any average is on the bad side, `health -= 1`; otherwise `health += 1`. If no variable had readings, health does not change. Health stays within 0-100. All but proximity are also the Data graphs' warn lines.
 - Sleep: the pet sleeps when it is dark (APDS9960 clear channel below 10, `PET_DARK_LIGHT`) but not covered, for 30 seconds. It wakes as soon as it is light. Health updates and surprises pause while it sleeps, and a surprise in progress is cancelled without a penalty. Being covered is not sleep: it counts as bad proximity.
 - Death: at `health = 0` the pet is dead. Health and surprises stop, and the screen reads "tap to hatch". A tap on the pet hatches a new one at `100`.
 - Surprises: On occasion, the pet should make use of its non-environmentally significant sensors to give the user surprise tasks which change its health by more significant amounts. A prompt at the top of the Pet screen names the task.
@@ -43,10 +44,12 @@ Use the `assets/pirkkala.ttf` font for text. Use text minimally. Pirkkala is a p
      - Pedometer: The pet asks to go on a walk. If the pedometer counts 10 new steps (`PET_WALK_STEPS`) within 30 seconds, `health += 15`; if not `health -= 15`.
      - Microphone: The pet asks to hear music. If the microphone reads at least 60 dB SPL (`PET_MUSIC_DB`) for 5 seconds in total (`PET_MUSIC_S`) within 30 seconds, `health += 15`; if not `health -= 15`.
      - These surprises come at random intervals of 10 to 20 minutes of awake time, one at a time, with the three kinds equally likely.
+- All health changes should be accompanied by a brief popup in the upper left corner of the screen showing the value changed (red if negative, green if positive).
 - Data: `health` is saved to `pet.state` every 60 seconds and when the daemon stops, so a shutdown freezes the pet (a dead pet stays dead) rather than resetting it.
 
 **Data:**
-- Visuals: line graphs drawn with Pillow by `render_graph` in `src/ui/display.py`, as currently implemented. Each screen shows one metric (CO2 in ppm, air quality as the VOC index, noise in dB SPL). From top to bottom it has the title, the current value in large text with its unit, and a line graph with min/max labels on the y axis and time labels on the x axis. Text is black at 16 px for the title and labels and 48 px for the value; secondary text (unit, axis labels, status messages) is grey. Missing samples break the line, and when the latest value is missing "no data" replaces the value.
-- Color: color is used only for warn levels. A dashed orange line marks the metric's warn level (CO2 1000 ppm, VOC 150, noise 70 dB). The current value turns orange above the warn level and red above 1.5× it.
+- Visuals: line graphs drawn with Pillow by `render_graph` in `src/ui/display.py`, as currently implemented. Each screen shows one metric (CO2 in ppm, temperature in C, air quality as the VOC index, noise in dB SPL). From top to bottom it has the title, the current value in large text with its unit, and a line graph with min/max labels on the y axis and time labels on the x axis. Text is black at 16 px for the title and labels and 48 px for the value; secondary text (unit, axis labels, status messages) is grey. Missing samples break the line, and when the latest value is missing "no data" replaces the value.
+- Color: A dashed orange line marks the metric's warn level, its `PET_*_MAX` value (CO2 1300 ppm, temperature 30 C, VOC 150, noise 70 dB). The current value turns orange above the warn level and red above 1.5× it. Each data type's name also has a different color: CO2 is blue, temperature is dark red, air quality is green, noise is purple.
 - Navigation: the metric screens are cycled using a dedicated button at the top of the screen: the metric's name, marked with ">".
-- Time (not yet built; needs the 48-hour history store planned in DESIGN.md): Another button at the top of the screen cycles through time periods. Until then the graphs cover the last 10 minutes. The maximum should be the full 48-hour data saving period, and the minimum should be the past hour. If the device detects that there has been a skip in time (i.e. the device has been powered off for some period of time), a graphical line should be simply rendered on the graph to indicate that there has been a time skip (assuming this is possible).
+- Time: Another button at the top right of the screen cycles through time periods. The 10-minute view is drawn from live readings; the longer ones from the daemon's 48-hour minute history (`history.bin`). Intervals should be 10 minutes, 1 hour, 12 hours, 24 hours, and 48 hours. If the device detects that there has been a skip in time (i.e. the device has been powered off for some period of time), a graphical line (dashed, gray) should be simply rendered on the graph to indicate that there has been a time skip.
+- A non-graph screen should also occupy the data source queue, called "other". It should have four quadrants, displaying the values of color (with a swatch), proximity, recent steps, and light level. Recent steps are the steps counted in the last 10 minutes; the swatch shows the color's hue at full brightness, next to the raw red, green and blue readings.

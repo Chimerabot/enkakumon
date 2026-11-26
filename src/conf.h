@@ -25,11 +25,12 @@ struct conf {
     char socket_path[CONF_STR_MAX];
     int max_clients;
     char heartbeat_path[CONF_STR_MAX];
+    char history_path[CONF_STR_MAX];
 
     /* Health system (src/analysis/pet.c) */
     char pet_path[CONF_STR_MAX];
     int pet_save_s;
-    double pet_co2_max, pet_voc_max, pet_db_max, pet_prox_max;
+    double pet_co2_max, pet_temp_max, pet_voc_max, pet_db_max, pet_prox_max;
     double pet_dark_light;
     int pet_sleep_s;
     double pet_color_ratio;

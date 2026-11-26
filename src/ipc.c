@@ -3,6 +3,7 @@
 #include <errno.h>
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -130,6 +131,7 @@ void ipc_accept(struct ipc *p)
         cl->fd = fd;
         cl->in_len = 0;
         cl->discarding = false;
+        cl->history_req = 0;
     }
 }
 
@@ -144,12 +146,22 @@ void ipc_drop(struct ipc *p, int slot)
     cl->fd = -1;
 }
 
-static void handle_line(struct ipc *p, const char *line, size_t len)
+static void handle_line(struct ipc *p, struct ipc_client *cl, const char *line, size_t len)
 {
+    char text[IPC_LINE_MAX + 1];
+
     if (len > 0 && line[len - 1] == '\r')
         len--;
-    if (len == 3 && memcmp(line, "tap", 3) == 0)
+    memcpy(text, line, len);
+    text[len] = '\0';
+    if (strcmp(text, "tap") == 0) {
         p->taps++;
+    } else if (strncmp(text, "history ", 8) == 0) {
+        char *end;
+        long m = strtol(text + 8, &end, 10);
+        if (end != text + 8 && *end == '\0' && m > 0 && m <= 100000)
+            cl->history_req = (int)m;
+    }
 }
 
 void ipc_client_input(struct ipc *p, int slot)
@@ -172,7 +184,7 @@ void ipc_client_input(struct ipc *p, int slot)
         char ch = buf[i];
         if (ch == '\n') {
             if (!cl->discarding)
-                handle_line(p, cl->in, cl->in_len);
+                handle_line(p, cl, cl->in, cl->in_len);
             cl->in_len = 0;
             cl->discarding = false;
         } else if (!cl->discarding) {
@@ -186,16 +198,21 @@ void ipc_client_input(struct ipc *p, int slot)
     }
 }
 
+void ipc_send(struct ipc *p, int slot, const char *line, size_t len)
+{
+    struct ipc_client *cl = &p->clients[slot];
+
+    if (cl->fd < 0)
+        return;
+    ssize_t n = send(cl->fd, line, len, MSG_NOSIGNAL | MSG_DONTWAIT);
+    if (n < 0 || (size_t)n != len)
+        ipc_drop(p, slot); /* slow or broken: never wait on it */
+}
+
 void ipc_publish(struct ipc *p, const char *line, size_t len)
 {
-    for (int i = 0; i < IPC_MAX_CLIENTS; i++) {
-        struct ipc_client *cl = &p->clients[i];
-        if (cl->fd < 0)
-            continue;
-        ssize_t n = send(cl->fd, line, len, MSG_NOSIGNAL | MSG_DONTWAIT);
-        if (n < 0 || (size_t)n != len)
-            ipc_drop(p, i); /* slow or broken: never wait on it */
-    }
+    for (int i = 0; i < IPC_MAX_CLIENTS; i++)
+        ipc_send(p, i, line, len);
 }
 
 void ipc_close(struct ipc *p)
@@ -222,14 +239,14 @@ static const char *num(char *dst, size_t size, double v, int decimals)
 int ipc_format_json(char *buf, size_t size, time_t t, const struct readings *r,
                     const struct pet_status *pet)
 {
-    char b[9][32], task[24] = "null";
+    char b[12][32], task[24] = "null";
 
     if (pet->task != NULL)
         snprintf(task, sizeof(task), "\"%s\"", pet->task);
 
     int n = snprintf(buf, size,
                      "{\"t\":%lld,\"co2\":%s,\"temp_c\":%s,\"rh\":%s,\"voc\":%s,"
-                     "\"light\":%s,\"proximity\":%s,\"motion\":%s,\"steps\":%s,\"db\":%s,"
+                     "\"light\":%s,\"red\":%s,\"green\":%s,\"blue\":%s,\"proximity\":%s,\"motion\":%s,\"steps\":%s,\"db\":%s,"
                      "\"health\":%d,\"state\":\"%s\",\"task\":%s}\n",
                      (long long)t,
                      num(b[0], sizeof(b[0]), r->co2, 0),
@@ -237,6 +254,9 @@ int ipc_format_json(char *buf, size_t size, time_t t, const struct readings *r,
                      num(b[2], sizeof(b[2]), r->rh, 1),
                      num(b[3], sizeof(b[3]), r->voc, 0),
                      num(b[4], sizeof(b[4]), r->light, 0),
+                     num(b[9], sizeof(b[9]), r->red, 0),
+                     num(b[10], sizeof(b[10]), r->green, 0),
+                     num(b[11], sizeof(b[11]), r->blue, 0),
                      num(b[5], sizeof(b[5]), r->proximity, 0),
                      num(b[6], sizeof(b[6]), r->motion, 2),
                      num(b[7], sizeof(b[7]), r->steps, 0),

@@ -8,7 +8,7 @@ Oct 27, 2026 (rev 3: C core + Python UI); status updated Nov 25, 2026 · @Gideon
 | --- | --- | --- |
 | 1. Sensor daemon (C) | **Done** | M1, merged in PR #1 (pedometer registers corrected afterwards in "Fix pedometer") |
 | 2. Graphs on the touchscreen (Python UI) | **Done** | M2, merged in PR #2 |
-| 3. Pet and UX (`enkakumon ux.md`) | **Done** except the 48-hour Data view | M3, PR #3, then reworked to the UX doc |
+| 3. Pet and UX (`enkakumon ux.md`) | **Done**, including the 48-hour history store (`src/history.c`) | M3, PR #3, then reworked to the UX doc |
 
 All sensors in the hardware table are connected, the SCD40 included. The health system and the rest of the pet UX are specified in `enkakumon ux.md`, which takes precedence over this plan wherever they differ. Both programs start at boot from systemd (`make && sudo make install`).
 
@@ -65,8 +65,8 @@ All I2C devices share `/dev/i2c-1` (raw `ioctl(I2C_RDWR)` in C; `board.I2C()` in
 
 - **Loop:** single-threaded, with an absolute 1 s `timerfd` driving SCD40 → SGP40 → APDS9960 → LSM6DSOX → mic → pet → publish, in that order. The mic captures on its own pthread with blocking `snd_pcm_readi`, `MIC_PERIOD_FRAMES` (0.1 s) per read, and keeps a mutex-guarded ring covering ~1 s of per-period mean squares. A cycle that takes over 100 ms is logged, and so are missed timer ticks.
 - **IPC:** a Unix stream socket at `SOCKET_PATH`, up to `MAX_CLIENTS`. Each second the daemon sends every client one JSON line, with `null` for missing values:
-  `{"t":<unix s>,"co2":612,"temp_c":22.4,"rh":41.0,"voc":98,"light":530,"proximity":3,"motion":0.04,"steps":120,"db":41.3,"health":80,"state":"idle","task":null}`
-  `state` is `idle`, `sleeping`, `unhealthy` or `dead`; `task` is the running surprise (`red`, `green`, `blue`, `walk`, `music`) or `null`. `tap` from a client hatches a new pet if it is dead.
+  `{"t":<unix s>,"co2":612,"temp_c":22.4,"rh":41.0,"voc":98,"light":530,"red":200,"green":150,"blue":90,"proximity":3,"motion":0.04,"steps":120,"db":41.3,"health":80,"state":"idle","task":null}`
+  `state` is `idle`, `sleeping`, `unhealthy` or `dead`; `task` is the running surprise (`red`, `green`, `blue`, `walk`, `music`) or `null`. `tap` from a client hatches a new pet if it is dead. `history <minutes>` (1 to 2880) is answered to that client alone with one line, `{"hist":<minutes>,"co2":[...],"temp_c":[...],"voc":[...],"db":[...],"skip":[...]}`: up to 188 per-bin averages per metric (`null` = no data) and the bins where the device had been off (`src/history.h`).
   Clients may send `tap\n`. Any other input is ignored, and input lines over 64 bytes are thrown away. A slow or broken client is dropped, never waited on: a send that would block, or that is short, drops the client. Connections beyond `MAX_CLIENTS` are accepted and closed at once. At startup a stale socket file is unlinked, but if another daemon is still serving the path the daemon exits 2.
 - **Supervision:** shipped as `enkakumon.service` (systemd, `Restart=on-failure`, `RestartSec=2`, `RestartPreventExitStatus=1`; runs as user `enkakumon` with the `i2c` and `audio` groups). The daemon touches `HEARTBEAT_PATH` once at startup, before the first cycle, and then every cycle. SIGTERM or SIGINT, delivered through a `signalfd`, stops it cleanly: stop the SCD40, close all fds, unlink the socket, exit 0. Exit 1 means a config error; exit 2 means the socket, timer or another non-sensor resource is unusable. A missing sensor is never fatal.
 - **Make targets:** `make` builds `enkakumond`. `make test`, `make asan` (AddressSanitizer + UBSan) and `make memcheck` (valgrind) run `test/`. `make soakcheck` runs the daemon for `SOAK_S` (default 1 h). After a `SOAK_WARMUP_S` (60 s) warmup it fails if RSS grows, the fd count changes, the heartbeat gets more than 5 s old, or SIGTERM doesn't exit 0. Keep socket clients disconnected during the soak, because they change the fd count.

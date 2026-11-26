@@ -2,8 +2,9 @@
  * pet.h — the enkakumon health system (docs/enkakumon ux.md).
  *
  * Health is 0..100 and starts at 100. Every PET_UPDATE_S of awake time it
- * moves by 1: -1 if the average of any significant reading (co2, voc, db,
- * proximity) is above its PET_*_MAX, else +1 (no change if none had samples).
+ * moves by 1: -1 if the average of any significant reading (co2, temp_c,
+ * voc, db, proximity) is above its PET_*_MAX, else +1 (no change if none had
+ * samples).
  * State: dead at 0; sleeping while dark (light < PET_DARK_LIGHT, not covered)
  * for PET_SLEEP_S; unhealthy at <= 50; otherwise idle. Sleep pauses updates
  * and surprises. A dead pet stays dead until a tap hatches a new one.
@@ -39,7 +40,7 @@
 /* Same order as the frames in assets/enkakumon-sprite.png. */
 enum pet_state { PET_IDLE, PET_SLEEPING, PET_UNHEALTHY, PET_DEAD };
 enum pet_task { TASK_NONE, TASK_RED, TASK_GREEN, TASK_BLUE, TASK_WALK, TASK_MUSIC, TASK_COUNT };
-enum { SIG_CO2, SIG_VOC, SIG_DB, SIG_PROX, SIG_COUNT }; /* significant readings */
+enum { SIG_CO2, SIG_TEMP, SIG_VOC, SIG_DB, SIG_PROX, SIG_COUNT }; /* significant readings */
 
 struct pet {
     const struct conf *conf;

@@ -6,6 +6,7 @@
 
 # Runtime state
 pet.state
+history.bin
 *.tmp
 
 # Python

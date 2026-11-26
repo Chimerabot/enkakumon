@@ -33,7 +33,9 @@ static const struct key keys[] = {
     { "HEARTBEAT_PATH", K_STR, offsetof(struct conf, heartbeat_path) },
     { "PET_PATH", K_STR, offsetof(struct conf, pet_path) },
     { "PET_SAVE_S", K_INT, offsetof(struct conf, pet_save_s) },
+    { "HISTORY_PATH", K_STR, offsetof(struct conf, history_path) },
     { "PET_CO2_MAX", K_DBL, offsetof(struct conf, pet_co2_max) },
+    { "PET_TEMP_MAX", K_DBL, offsetof(struct conf, pet_temp_max) },
     { "PET_VOC_MAX", K_DBL, offsetof(struct conf, pet_voc_max) },
     { "PET_DB_MAX", K_DBL, offsetof(struct conf, pet_db_max) },
     { "PET_PROXIMITY_MAX", K_DBL, offsetof(struct conf, pet_prox_max) },
@@ -63,7 +65,9 @@ void conf_defaults(struct conf *c)
 
     strcpy(c->pet_path, "pet.state");
     c->pet_save_s = 60;
-    c->pet_co2_max = 1000;
+    strcpy(c->history_path, "history.bin");
+    c->pet_co2_max = 1300;
+    c->pet_temp_max = 30;
     c->pet_voc_max = 150;
     c->pet_db_max = 70;
     c->pet_prox_max = 200;
@@ -131,8 +135,8 @@ static int validate(const struct conf *c, const char *path)
     else if (c->default_rh < 0.0 || c->default_rh > 100.0)
         bad = "DEFAULT_RH must be 0..100";
     else if (c->i2c_dev[0] == '\0' || c->socket_path[0] == '\0' || c->heartbeat_path[0] == '\0' ||
-             c->pet_path[0] == '\0')
-        bad = "I2C_DEV, SOCKET_PATH, HEARTBEAT_PATH and PET_PATH must not be empty";
+             c->pet_path[0] == '\0' || c->history_path[0] == '\0')
+        bad = "I2C_DEV, SOCKET_PATH, HEARTBEAT_PATH, PET_PATH and HISTORY_PATH must not be empty";
     else if (c->pet_save_s < 1 || c->pet_sleep_s < 1 || c->pet_walk_steps < 1 || c->pet_music_s < 1)
         bad = "PET_SAVE_S, PET_SLEEP_S, PET_WALK_STEPS and PET_MUSIC_S must be >= 1";
     else if (c->pet_color_ratio < 1.0)

@@ -34,6 +34,7 @@ static struct readings clean(void)
     struct readings r;
     readings_clear(&r);
     r.co2 = 600;
+    r.temp_c = 22;
     r.voc = 100;
     r.db = 40;
     r.proximity = 5;
@@ -81,12 +82,13 @@ static void test_health_update(void)
     run(&p, &r, 1);
     CHECK(p.health == 91); /* all good: +1 */
 
-    struct readings bad[] = { clean(), clean(), clean(), clean() };
-    bad[0].co2 = 1100;
-    bad[1].voc = 200;
-    bad[2].db = 80;
-    bad[3].proximity = 250; /* covered */
-    for (int i = 0; i < 4; i++) {
+    struct readings bad[] = { clean(), clean(), clean(), clean(), clean() };
+    bad[0].co2 = 1400;
+    bad[1].temp_c = 31;
+    bad[2].voc = 200;
+    bad[3].db = 80;
+    bad[4].proximity = 250; /* covered */
+    for (int i = 0; i < 5; i++) {
         p = fresh(90);
         run(&p, &bad[i], 300);
         CHECK(p.health == 89); /* any one bad: -1 */

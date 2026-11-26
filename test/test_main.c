@@ -209,11 +209,13 @@ static void test_json(void)
     char buf[512];
     struct readings r = {
         .co2 = 612, .temp_c = 22.4, .rh = 41.0, .voc = 98, .light = 530,
+        .red = 200, .green = 150, .blue = 90,
         .proximity = 3, .motion = 0.04, .steps = 120, .db = 41.3,
     };
     struct pet_status ps = { .health = 80, .state = "idle", .task = "walk" };
     const char *want = "{\"t\":1700000000,\"co2\":612,\"temp_c\":22.4,\"rh\":41.0,\"voc\":98,"
-                       "\"light\":530,\"proximity\":3,\"motion\":0.04,\"steps\":120,\"db\":41.3,"
+                       "\"light\":530,\"red\":200,\"green\":150,\"blue\":90,"
+                       "\"proximity\":3,\"motion\":0.04,\"steps\":120,\"db\":41.3,"
                        "\"health\":80,\"state\":\"idle\",\"task\":\"walk\"}\n";
     int n = ipc_format_json(buf, sizeof(buf), 1700000000, &r, &ps);
     CHECK(n == (int)strlen(want));
@@ -222,7 +224,8 @@ static void test_json(void)
     readings_clear(&r);
     ps = (struct pet_status){ .health = 0, .state = "dead", .task = NULL };
     const char *nulls = "{\"t\":5,\"co2\":null,\"temp_c\":null,\"rh\":null,\"voc\":null,"
-                        "\"light\":null,\"proximity\":null,\"motion\":null,\"steps\":null,\"db\":null,"
+                        "\"light\":null,\"red\":null,\"green\":null,\"blue\":null,"
+                        "\"proximity\":null,\"motion\":null,\"steps\":null,\"db\":null,"
                         "\"health\":0,\"state\":\"dead\",\"task\":null}\n";
     n = ipc_format_json(buf, sizeof(buf), 5, &r, &ps);
     CHECK(n == (int)strlen(nulls));
@@ -280,6 +283,18 @@ static void test_ipc(void)
     send_all(sv[1], "tap\ntap\n"); /* the overlong line ends at the first \n */
     ipc_client_input(&p, 0);
     CHECK(p.taps == 4);
+
+    /* history requests are recorded for their client; bad ones are ignored */
+    send_all(sv[1], "history 60\n");
+    ipc_client_input(&p, 0);
+    CHECK(p.clients[0].history_req == 60);
+    p.clients[0].history_req = 0;
+    send_all(sv[1], "history\nhistory 0\nhistory x\nhistory 5x\n");
+    ipc_client_input(&p, 0);
+    CHECK(p.clients[0].history_req == 0 && p.taps == 4);
+
+    ipc_send(&p, 0, "y\n", 2);
+    CHECK(read(sv[1], buf, sizeof(buf)) == 2 && memcmp(buf, "y\n", 2) == 0);
 
     ipc_publish(&p, "x\n", 2);
     CHECK(p.clients[0].fd == sv[0]);

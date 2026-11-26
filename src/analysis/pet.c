@@ -96,7 +96,7 @@ void pet_update(struct pet *p, const struct readings *r, double dt)
         return;
     }
 
-    const double v[SIG_COUNT] = { r->co2, r->voc, r->db, r->proximity };
+    const double v[SIG_COUNT] = { r->co2, r->temp_c, r->voc, r->db, r->proximity };
     for (int i = 0; i < SIG_COUNT; i++) {
         if (!isnan(v[i])) {
             p->sum[i] += v[i];
@@ -105,7 +105,8 @@ void pet_update(struct pet *p, const struct readings *r, double dt)
     }
     p->window_s += dt;
     if (p->window_s >= PET_UPDATE_S) {
-        const double max[SIG_COUNT] = { c->pet_co2_max, c->pet_voc_max, c->pet_db_max, c->pet_prox_max };
+        const double max[SIG_COUNT] = { c->pet_co2_max, c->pet_temp_max, c->pet_voc_max,
+                                        c->pet_db_max, c->pet_prox_max };
         bool seen = false, bad = false;
         for (int i = 0; i < SIG_COUNT; i++) {
             if (p->n[i] > 0) {

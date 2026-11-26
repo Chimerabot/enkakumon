@@ -4,7 +4,7 @@ CS370 term project · Gideon Rank & Navin Mani · rev 1, Oct 28, 2026
 
 Sources: [PROBLEM MEMO.md](PROBLEM%20MEMO.md) (requirements), [enkakumon v1 code plan.md](enkakumon%20v1%20code%20plan.md) (implementation contract for the built daemon and UI), [enkakumon ux.md](enkakumon%20ux.md) (pet and UI specification; takes precedence wherever documents differ), [CLAUDE.md](CLAUDE.md) (team rules), and the code in `src/`.
 
-**Status key:** **Built** = in the repo now (the daemon, the UI and the pet of `enkakumon ux.md`). **Planned** = proposed here to implement the UX doc's requirements (the 48-hour history store that completes Mechanism D).
+**Status key:** **Built** = in the repo now (the daemon, the UI and the pet of `enkakumon ux.md`). **Planned** = proposed here to implement the UX doc's requirements (only the clean-shutdown marker and a few hardening items remain).
 
 ---
 
@@ -84,7 +84,7 @@ flowchart LR
     SPI -->|"full redraw ≈ 0.2 s"| LCD
 
     MAIN -->|"pet.state ≈ 150 B every 60 s + on exit: write, fsync, rename"| EXT4
-    MAIN -.->|"Planned: history.bin 64 B record every 60 s, pwrite + fdatasync"| EXT4
+    MAIN -->|"history.bin 64 B record every 60 s, pwrite + fdatasync"| EXT4
     MAIN -->|"stderr: log-once per fault, ≈ 0 lines/s steady state"| JRN
     UI -->|"stderr: log-once per fault"| JRN
     JRN -->|"batched journal writes"| EXT4
@@ -127,8 +127,8 @@ The problem memo chose **Mechanism D (custom storage layer)** and **Mechanism E 
 | --- | --- | --- | --- |
 | Crash-consistent pet state: one-line `health=N` file, temp → `fsync` → `rename` (+ directory `fsync`) | `pet_save` / `pet_load` in `src/analysis/pet.c` | Built | R4, R5: the pet must survive power loss (UX doc: a shutdown freezes its stats, never resets them). `rename` is atomic, so after a cut the file holds either the old state or the new one, never a mix. Saving every 60 s caps the loss at 60 s. |
 | Clean-shutdown marker: `clean_exit=0` in periodic saves, `=1` in the SIGTERM save | `pet.c` | Planned | R4: on the next start the daemon can tell a clean stop from a power cut or crash and log it. This is how the battery-death case gets detected. |
-| Minute-history ring file: fixed 64 B records with sequence number and CRC-32 | `src/history.c` (new); `HISTORY_PATH` in `enkakumon.conf` | Planned | R2: the memo's core use case ("patterns over time") and the UX doc's 48-hour Data view need more than the UI's 10-minute RAM buffer. Fixed-size records in a preallocated file give constant disk use, constant-time append, and torn-write detection by CRC. Full layout in §4. |
-| History query over IPC: `history <minutes>` → stream of records | `src/ipc.c`; the Data side in `src/ui/` | Planned | R2 "convey": the Data side shows 1 h to 48 h graphs, with power-off gaps marked, without reading the file itself, so the file format stays private to the C core (CLAUDE.md: no graded mechanism in Python). |
+| Minute-history ring file: fixed 64 B records with sequence number and CRC-32 | `src/history.c`; `HISTORY_PATH` in `enkakumon.conf` | Built | R2: the memo's core use case ("patterns over time") and the UX doc's 48-hour Data view need more than the UI's 10-minute RAM buffer. Fixed-size records in a preallocated file give constant disk use, constant-time append, and torn-write detection by CRC. Full layout in §4. |
+| History query over IPC: `history <minutes>` → one JSON line, binned to at most 188 points per metric | `src/ipc.c`; the Data side in `src/ui/` | Built | R2 "convey": the Data side shows 1 h to 48 h graphs, with power-off gaps marked, without reading the file itself, so the file format stays private to the C core (CLAUDE.md: no graded mechanism in Python). |
 | In-RAM display history: 600-sample deque per metric, outage recorded as gaps | `src/ui/main.py` | Built | R2 (short term): 10-minute graphs at 1 Hz. Replaced by the history query when the Data side is built. Not part of the graded mechanism. |
 
 ---
@@ -168,8 +168,8 @@ Log lines are quoted as the code emits them (`journalctl -u enkakumon` for the d
 | UI process | Display init fails / UI crash | Exception at init; process exits | Exit 2; `enkakumon-ui.service` restarts it after 2 s (not after exit 1, a config error) | `enkakumon-ui: display init failed: …` |
 | **Pet state** | Missing or corrupt `pet.state` | Open fails / parse fails / value out of range | Defaults (health 100); next save overwrites it | `enkakumond: pet: <path>: <reason>, starting a new pet` |
 | Pet state | Save fails (disk full, read-only FS) | `write`/`fsync`/`rename` error | Keep running with in-RAM state; temp file removed; retry at next 60 s save | `enkakumond: pet: save failed: No space left on device` (log once) |
-| **History store** (Planned) | Torn record after power cut | CRC-32 mismatch on scan at startup | Record skipped, appends resume after the highest valid sequence number | `enkakumond: history: 1 torn record at slot N (power loss?)` |
-| History store | File missing, wrong size, or bad header | `open`/`fstat`/magic check | Recreate and preallocate it; older history is lost | `enkakumond: history: <path>: <reason>, starting new file` |
+| **History store** | Torn record after power cut | CRC-32 mismatch on scan at startup | Record skipped, appends resume after the highest valid sequence number | `enkakumond: history: skipped N torn record(s) (power loss?)` |
+| History store | File missing or wrong size; unusable storage | `open`/`fstat` size check; `open`/`pwrite`/`fdatasync` error | Recreate and preallocate it (older history is lost); if storage is unusable, history is kept in RAM | `enkakumond: history: <path> has the wrong size, starting a new file`; `history: <step> <path>: <error> (history kept in RAM)` (log once) |
 | **Power** (USB now, battery later) | Supply cut / battery dies | Not detectable in v1; on next boot the `clean_exit=0` marker shows it | Recover from disk: pet ≤ 60 s old, history ≤ 1 record lost. Battery build: a low-battery GPIO triggers `systemctl poweroff`, so the shutdown is clean | Next boot: `enkakumond: previous run ended uncleanly`. `journalctl --list-boots` shows a boot with no `stopping` line |
 | **microSD / ext4** | FS corruption or wear | fsck at boot; write `EIO` | Pet and history fall back as above; the daemon never treats storage as fatal | `pet: save failed: Input/output error` / `history: … Input/output error` |
 
@@ -185,11 +185,11 @@ Log lines are quoted as the code emits them (`journalctl -u enkakumon` for the d
 | UI graph history | UI RAM, `deque(maxlen=600)` × 10 | 1 sample/metric/s | Python floats / `None` | 10 min; cleared when the UI restarts | Lost |
 | Heartbeat | `/dev/shm/enkakumon.heartbeat` (tmpfs) | mtime touched 1 Hz, 0 bytes | Empty file | Until reboot | Gone with RAM; recreated on start |
 | Pet state | `PET_PATH`, default `pet.state` in the working directory (ext4) | ≈ 12 B every 60 s + on clean exit | Text: `health=N` | Single file, overwritten | Write to `pet.state.tmp`, `fsync`, `rename` over `pet.state`, `fsync` the directory. A cut before the rename leaves the old file plus an orphan `.tmp` (ignored, then overwritten). A cut after leaves the new file. The file is never half old, half new. Worst case loses 60 s of changes: at most one 5-minute health step or one surprise result |
-| Minute history (Planned) | `HISTORY_PATH`, default `~/enkakumon/history.bin` (ext4) | 1 × 64 B record/min = 92 KB/day | Binary, little-endian, preallocated ring (layout below) | 48 h = 2 880 slots = 184 KB fixed; oldest overwritten | `pwrite` of 64 B to a slot that never crosses a 512 B sector, then `fdatasync`. A cut leaves the slot old, new, or torn. A torn slot fails its CRC, is logged and skipped, and appends resume after the highest valid `seq`. Worst case loses one record plus the minute being averaged in RAM |
+| Minute history | `HISTORY_PATH`, default `history.bin` in the working directory (ext4) | 1 × 64 B record/min = 92 KB/day | Binary, little-endian, preallocated ring (layout below) | 48 h = 2 880 slots = 184 KB fixed; oldest overwritten | `pwrite` of 64 B to a slot that never crosses a 512 B sector, then `fdatasync`. A cut leaves the slot old, new, or torn. A torn slot fails its CRC, is logged and skipped, and appends resume after the highest valid `seq`. Worst case loses one record plus the minute being averaged in RAM |
 | Logs | journald (stderr of both processes) | Event-driven, log-once: ≈ 0 lines/s steady state, a few lines per fault | journald binary journal | Capped with a drop-in `SystemMaxUse=16M` (Planned) | journald syncs every 5 min (immediately for CRIT), so up to the last 5 min of log lines can be lost. This is why unclean shutdown is detected from `pet.state`, not from logs |
 | Config | `enkakumon.conf` | Read once at start | `KEY = value` text | Hand-edited | Read-only at runtime; not at risk |
 
-**History record layout (Planned, 64 B).** Each record holds one minute's averages over the valid samples.
+**History record layout (64 B).** Each record holds one minute's averages over the valid samples.
 
 | Offset | Field | Type |
 | --- | --- | --- |

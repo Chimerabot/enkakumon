@@ -18,11 +18,11 @@ CPPFLAGS = -D_GNU_SOURCE -Isrc -MMD -MP
 LDLIBS   = -lasound -lpthread -lm
 ASAN     = -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize-recover=all
 
-LIB_SRC  = src/conf.c src/i2c.c src/sensors.c src/mic.c src/ipc.c src/analysis/pet.c \
+LIB_SRC  = src/conf.c src/i2c.c src/sensors.c src/mic.c src/ipc.c src/history.c src/analysis/pet.c \
            src/vendor/sensirion_gas_index_algorithm.c
 LIB_OBJ  = $(LIB_SRC:%.c=build/%.o)
 MAIN_OBJ = build/src/main.o
-TESTS    = test_main test_pet
+TESTS    = test_main test_pet test_history
 
 ASAN_LIB_OBJ = $(LIB_SRC:%.c=build/asan/%.o)
 

@@ -2,12 +2,14 @@
  * ipc.h — local Unix stream socket: one JSON line per second to every client.
  *
  * Sends never block: a client whose send would block, or is short, is dropped.
- * Clients may send "tap\n"; anything else is ignored. Connections beyond
- * MAX_CLIENTS are accepted and closed at once.
+ * Clients may send "tap\n" or "history <minutes>\n" (answered to that client
+ * alone with one history line, see history.h); anything else is ignored.
+ * Connections beyond MAX_CLIENTS are accepted and closed at once.
  *
  * Acceptance tests (test/test_main.c):
  *   the JSON line matches the contract with all values and with nulls;
- *   "tap\n" is counted and other input ignored; a closed client is dropped.
+ *   "tap\n" is counted, "history N\n" recorded for its client, other input
+ *   ignored; a closed client is dropped.
  * On the Pi: socat - UNIX-CONNECT:<SOCKET_PATH> shows one JSON line per second.
  */
 #ifndef ENKAKUMON_IPC_H
@@ -28,6 +30,7 @@ struct ipc_client {
     size_t in_len;
     bool discarding; /* current input line overflowed; skip to newline */
     char in[IPC_LINE_MAX];
+    int history_req; /* minutes asked for by "history <minutes>", 0 if none */
 };
 
 struct ipc {
@@ -48,6 +51,8 @@ void ipc_accept(struct ipc *p);
 void ipc_client_input(struct ipc *p, int slot);
 void ipc_drop(struct ipc *p, int slot);
 void ipc_publish(struct ipc *p, const char *line, size_t len);
+/* To one client; like publish, a send that would block drops it. */
+void ipc_send(struct ipc *p, int slot, const char *line, size_t len);
 void ipc_close(struct ipc *p);
 
 /* The pet's part of the JSON line. task may be NULL (published as null);

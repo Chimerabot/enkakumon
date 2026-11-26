@@ -32,6 +32,7 @@
 
 #include "analysis/pet.h"
 #include "conf.h"
+#include "history.h"
 #include "ipc.h"
 #include "mic.h"
 #include "sensors.h"
@@ -46,6 +47,8 @@ struct daemon {
     struct mic mic;
     struct ipc ipc;
     struct pet pet;
+    struct history history;
+    char history_line[8192]; /* one answer to "history <minutes>" */
     bool print;
     int sig_fd, timer_fd, hb_fd;
     bool hb_logged, json_logged, print_logged;
@@ -115,12 +118,24 @@ static void cycle(void)
         d.last_save = t0.tv_sec;
     }
 
-    int len = ipc_format_json(line, sizeof(line), time(NULL), &r, &ps);
+    time_t now = time(NULL);
+    history_add(&d.history, &r, d.pet.health, pet_state(&d.pet), now);
+
+    int len = ipc_format_json(line, sizeof(line), now, &r, &ps);
     if (len > 0) {
         ipc_publish(&d.ipc, line, (size_t)len);
     } else if (!d.json_logged) {
         fprintf(stderr, "enkakumond: ipc: JSON line did not fit\n");
         d.json_logged = true;
+    }
+    for (int i = 0; i < IPC_MAX_CLIENTS; i++) {
+        struct ipc_client *cl = &d.ipc.clients[i];
+        if (cl->fd < 0 || cl->history_req == 0)
+            continue;
+        len = history_format(&d.history, d.history_line, sizeof(d.history_line), cl->history_req, now);
+        cl->history_req = 0;
+        if (len > 0)
+            ipc_send(&d.ipc, i, d.history_line, (size_t)len);
     }
     if (d.print)
         print_line(&r);
@@ -228,7 +243,7 @@ int main(int argc, char **argv)
 {
     const char *conf_path = "enkakumon.conf";
     bool conf_given = false;
-    bool ipc_ok = false, mic_ok = false, sensors_ok = false;
+    bool ipc_ok = false, mic_ok = false, sensors_ok = false, history_ok = false;
     int rc = EXIT_RESOURCE;
 
     d.sig_fd = d.timer_fd = d.hb_fd = -1;
@@ -310,6 +325,8 @@ int main(int argc, char **argv)
     pet_load(&d.pet, d.conf.pet_path); /* on failure it logs and keeps a new pet */
     clock_gettime(CLOCK_MONOTONIC, &now);
     d.last_save = now.tv_sec;
+    history_open(&d.history, d.conf.history_path); /* never fatal; logs its own failure */
+    history_ok = true;
 
     fprintf(stderr, "enkakumond: running (conf %s, socket %s)\n", conf_path, d.conf.socket_path);
     rc = run();
@@ -317,6 +334,8 @@ int main(int argc, char **argv)
         pet_save(&d.pet, d.conf.pet_path); /* a clean stop freezes the pet */
 
 cleanup:
+    if (history_ok)
+        history_close(&d.history); /* writes the partial minute */
     if (sensors_ok)
         sensors_close(&d.sensors);
     if (mic_ok)
