@@ -26,6 +26,23 @@ struct conf {
     char socket_path[CONF_STR_MAX];
     int max_clients;
     char heartbeat_path[CONF_STR_MAX];
+
+    /* Health system (src/analysis/pet.c) */
+    char pet_path[CONF_STR_MAX];
+    int pet_save_s;
+    int pet_health_start;
+    double pet_co2_warn, pet_co2_bad;
+    double pet_voc_warn, pet_voc_bad;
+    double pet_db_warn, pet_db_bad;
+    double pet_temp_min, pet_temp_max;
+    double pet_rh_min, pet_rh_max;
+    int pet_active_steps;
+    double pet_active_motion;
+    double pet_sleep_proximity;
+    double pet_sleep_light;
+    int pet_sleep_s;
+    double pet_wake_motion;
+    int pet_happy_min, pet_ok_min;
 };
 
 void conf_defaults(struct conf *c);

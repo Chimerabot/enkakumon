@@ -2,8 +2,8 @@
 display.py — ILI9341 screen (portrait 240x320) and TSC2007 touch controller.
 
 Frames are drawn off-screen with Pillow and pushed in one disp.image() call,
-so the screen is never cleared mid-frame (no flicker). render_graph() and
-render_message() need no hardware.
+so the screen is never cleared mid-frame (no flicker). render_graph(),
+render_pet() and render_message() need no hardware.
 
 Run on its own to calibrate touch: python src/ui/display.py prints raw x/y
 and the extremes seen; copy them into TOUCH_* in enkakumon.conf.
@@ -15,6 +15,9 @@ Acceptance tests (on the Pi):
   min/max labels and a dashed warn line; None values leave gaps, and a None
   latest value shows missing_text ("sensor offline" unless the caller says
   otherwise, e.g. "warming up").
+  draw_pet shows the mood, the sprite frame for the mood (idle for happy/ok,
+  unhealthy for sick, sleeping for sleeping) drawn in the mood color, a
+  health bar in the mood color, and the worst reading as one line of text.
   get_tap returns one (x, y) in screen pixels per press, however long the
   press; touching the top-left corner gives roughly (0, 0).
   An unplugged touch controller is logged once and retried every RETRY_S.
@@ -38,6 +41,17 @@ BG, FG = WHITE, BLACK
 
 # Pirkkala is a pixel font: it renders crisply only at multiples of 16 px.
 SMALL, MEDIUM, LARGE = 16, 32, 48
+
+# Pet screen. The sprite sheet is Gideon's art: four 100x100 frames,
+# idle / sleeping / unhealthy / dead.
+SPRITE_PATH = os.path.normpath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "..", "assets", "enkakumon-sprite.png"))
+SPRITE_SIZE = 100
+SPRITE_SCALE = 2
+MOOD_FRAME = {"happy": 0, "ok": 0, "sick": 2, "sleeping": 1}
+MOOD_COLOR = {"happy": (80, 200, 120), "ok": (230, 200, 60),
+              "sick": RED, "sleeping": (110, 150, 255)}
+_sprite_frames = None
 
 # Graph area
 GX0, GX1 = 44, 232
@@ -150,6 +164,62 @@ def render_graph(title, unit, values, warn_level, missing_text="sensor offline")
     return img
 
 
+def _sprite(frame):
+    """Frame `frame` of the sprite sheet, scaled up, as an alpha mask (the
+    art is black lines on transparent, so it is drawn in a color through
+    this mask), or None if unavailable."""
+    global _sprite_frames
+    if _sprite_frames is None:
+        try:
+            sheet = Image.open(SPRITE_PATH).convert("RGBA")
+        except OSError as e:
+            _log(f"sprite: {e}")
+            _sprite_frames = []
+        else:
+            size = SPRITE_SIZE * SPRITE_SCALE
+            _sprite_frames = [
+                sheet.crop((i * SPRITE_SIZE, 0, (i + 1) * SPRITE_SIZE, SPRITE_SIZE))
+                .resize((size, size), Image.NEAREST)  # keep the pixel art crisp
+                .getchannel("A")
+                for i in range(sheet.width // SPRITE_SIZE)]
+    return _sprite_frames[frame] if frame < len(_sprite_frames) else None
+
+
+def render_pet(health, mood, worst):
+    """Return a WIDTH x HEIGHT image of the pet: mood, sprite, health bar, worst."""
+    img = Image.new("RGB", (WIDTH, HEIGHT), BLACK)
+    d = ImageDraw.Draw(img)
+    if health is None or mood not in MOOD_FRAME:
+        d.text((8, 6), "enkakumon", font=_font(18), fill=WHITE)
+        d.text((8, 46), "no pet data", font=_font(22), fill=GREY)
+        return img
+
+    color = MOOD_COLOR[mood]
+    d.text((8, 6), "enkakumon", font=_font(18), fill=WHITE)
+    d.text((WIDTH - 8 - d.textlength(mood, font=_font(18)), 6), mood, font=_font(18), fill=color)
+
+    sprite = _sprite(MOOD_FRAME[mood])
+    if sprite is not None:
+        img.paste(color, ((WIDTH - sprite.width) // 2, 36), sprite)
+    else:
+        d.text((8, 120), "(sprite missing)", font=_font(16), fill=GREY)
+
+    # Health bar
+    bx0, bx1, by0, by1 = 20, WIDTH - 20, 252, 270
+    d.rectangle([bx0, by0, bx1, by1], outline=GREY)
+    fill = bx0 + 1 + round((bx1 - bx0 - 2) * max(0, min(100, health)) / 100)
+    if fill > bx0 + 1:
+        d.rectangle([bx0 + 1, by0 + 1, fill, by1 - 1], fill=color)
+    d.text((bx0, by1 + 4), f"health {health}", font=_font(14), fill=WHITE)
+
+    small = _font(16)
+    text, tcolor = (_text(worst), ORANGE) if worst else ("all readings OK", GREY)
+    while d.textlength(text, font=small) > WIDTH - 16 and len(text) > 1:
+        text = text[:-1]
+    d.text((8, 296), text, font=small, fill=tcolor)
+    return img
+
+
 def render_message(text):
     img = Image.new("RGB", (WIDTH, HEIGHT), BG)
     d = ImageDraw.Draw(img)
@@ -202,6 +272,9 @@ class Display:
 
     def draw_graph(self, title, unit, values, warn_level, missing_text="sensor offline"):
         self.show(render_graph(title, unit, values, warn_level, missing_text))
+
+    def draw_pet(self, health, mood, worst):
+        self.show(render_pet(health, mood, worst))
 
     def show_message(self, text):
         self.show(render_message(text))

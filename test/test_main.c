@@ -185,6 +185,8 @@ static void test_conf(void)
     CHECK(load_text("SAMPLE_HZ = 2\n", &c) != 0);
     CHECK(load_text("MAX_CLIENTS = 0\n", &c) != 0);
     CHECK(load_text("MIC_PERIOD_FRAMES = 0\n", &c) != 0);
+    CHECK(load_text("PET_CO2_WARN = 1500\nPET_CO2_BAD = 1000\n", &c) != 0);
+    CHECK(load_text("PET_OK_MIN = 80\n", &c) != 0); /* above PET_HAPPY_MIN */
 
     char longline[700];
     memset(longline, 'A', sizeof(longline) - 2);
@@ -211,26 +213,43 @@ static void test_json(void)
         .co2 = 612, .temp_c = 22.4, .rh = 41.0, .voc = 98, .light = 530,
         .proximity = 3, .motion = 0.04, .steps = 120, .db = 41.3,
     };
+    struct pet_status ps = { .health = 80, .mood = "happy", .worst = "CO\xe2\x82\x82 high" };
     const char *want = "{\"t\":1700000000,\"co2\":612,\"temp_c\":22.4,\"rh\":41.0,\"voc\":98,"
-                       "\"light\":530,\"proximity\":3,\"motion\":0.04,\"steps\":120,\"db\":41.3}\n";
-    int n = ipc_format_json(buf, sizeof(buf), 1700000000, &r);
+                       "\"light\":530,\"proximity\":3,\"motion\":0.04,\"steps\":120,\"db\":41.3,"
+                       "\"health\":80,\"mood\":\"happy\",\"worst\":\"CO\xe2\x82\x82 high\"}\n";
+    int n = ipc_format_json(buf, sizeof(buf), 1700000000, &r, &ps);
     CHECK(n == (int)strlen(want));
     CHECK(strcmp(buf, want) == 0);
 
     readings_clear(&r);
+    ps = (struct pet_status){ .health = 0, .mood = "sick", .worst = NULL };
     const char *nulls = "{\"t\":5,\"co2\":null,\"temp_c\":null,\"rh\":null,\"voc\":null,"
-                        "\"light\":null,\"proximity\":null,\"motion\":null,\"steps\":null,\"db\":null}\n";
-    n = ipc_format_json(buf, sizeof(buf), 5, &r);
+                        "\"light\":null,\"proximity\":null,\"motion\":null,\"steps\":null,\"db\":null,"
+                        "\"health\":0,\"mood\":\"sick\",\"worst\":null}\n";
+    n = ipc_format_json(buf, sizeof(buf), 5, &r, &ps);
     CHECK(n == (int)strlen(nulls));
     CHECK(strcmp(buf, nulls) == 0);
 
     r.co2 = 400;
     r.db = INFINITY;
-    n = ipc_format_json(buf, sizeof(buf), 5, &r);
+    n = ipc_format_json(buf, sizeof(buf), 5, &r, &ps);
     CHECK(n > 0 && strstr(buf, "\"co2\":400,") != NULL);
-    CHECK(n > 0 && strstr(buf, "\"db\":null}") != NULL);
+    CHECK(n > 0 && strstr(buf, "\"db\":null,") != NULL);
 
-    CHECK(ipc_format_json(buf, 20, 5, &r) == -1);
+    /* worst text is escaped, never able to break the line */
+    ps.worst = "a\"b\\c\nd";
+    n = ipc_format_json(buf, sizeof(buf), 5, &r, &ps);
+    CHECK(n > 0 && strstr(buf, "\"worst\":\"a\\\"b\\\\c\\u000ad\"}\n") != NULL);
+    CHECK(n > 0 && strchr(buf, '\n') == buf + n - 1);
+
+    char huge[200];
+    memset(huge, 'x', sizeof(huge) - 1);
+    huge[sizeof(huge) - 1] = '\0';
+    ps.worst = huge;
+    CHECK(ipc_format_json(buf, sizeof(buf), 5, &r, &ps) == -1);
+
+    ps.worst = NULL;
+    CHECK(ipc_format_json(buf, 20, 5, &r, &ps) == -1);
 }
 
 /* ---------- IPC ---------- */
